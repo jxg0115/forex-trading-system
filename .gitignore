@@ -1,0 +1,32 @@
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# 环境与运行时数据
+.env
+data/*.db
+data/*.db-*
+data/*.png
+data/*.jpg
+logs/
+
+# Node / 前端
+ui_layer/node_modules/
+ui_layer/dist/
+ui_layer/.vite/
+
+# 编辑器与系统
+.idea/
+.vscode/
+.DS_Store
+Thumbs.db
+ui_layer_v2/
+package_dist/
+build_pyinstaller/
+tmp_analysis/
+runtime/

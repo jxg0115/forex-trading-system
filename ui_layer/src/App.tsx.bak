@@ -1,0 +1,1438 @@
+import { useCallback, useEffect, useMemo, useState } from "react";
+import {
+  Activity,
+  Ban,
+  Bell,
+  BoxSelect,
+  Bot,
+  Cable,
+  CheckCircle2,
+  Cpu,
+  Eye,
+  FileText,
+  FileClock,
+  Layers,
+  Play,
+  Pencil,
+  RefreshCw,
+  Save,
+  Shield,
+  ShieldCheck,
+  Sparkles,
+  Square,
+  StopCircle,
+  TestTube2,
+  Trash2,
+  Undo2,
+  Wallet,
+  X,
+} from "lucide-react";
+import { KLineChart, type ChartMode } from "./components/KLineChart";
+import { FactorEditModal } from "./components/FactorEditModal";
+import { Mt5Panel } from "./components/Mt5Panel";
+import { OrderLogPanel } from "./components/OrderLogPanel";
+import { SymbolSearchSelect } from "./components/SymbolSearchSelect";
+import { api, type AiConfig, type AiStatus, type Alert, type BacktestResult, type Bar, type Factor, type FactorDraft, type FactorPayload, type IndicatorData, type MarkerPoint, type MatcherCandidate, type OptimizeResult, type Selection, type SystemState } from "./api";
+
+interface RegionStats {
+  bar_count: number;
+  return_pct: number;
+  trend: string;
+  volatility: string;
+}
+
+interface ScanResult {
+  regime: string;
+  regime_detail: string;
+  candidates: MatcherCandidate[];
+  errors: string[];
+  scanned: number;
+}
+
+type MainTab = "factors" | "trading" | "replay" | "ai";
+type SubTab = "mark" | "backtest" | "manage" | "signals" | "mt5" | "replay" | "orders";
+
+const TIMEFRAMES = ["M1", "M5", "M15", "M30", "H1", "H4", "D1"];
+const AI_ROLE_OPTIONS: Array<[string, string]> = [
+  ["factor_learning", "K线框选学习"],
+  ["market_monitor", "实时形态监控"],
+  ["code_review", "因子代码审查"],
+  ["backtest_analysis", "回测分析"],
+  ["trade_replay", "交易复盘"],
+  ["market_regime", "市场环境研判"],
+  ["alert_writing", "告警文案"],
+  ["health_diagnosis", "系统健康诊断"],
+];
+
+function toTime(iso: string): number {
+  return new Date(iso).getTime();
+}
+
+function computeRegionStats(bars: Bar[], selection: Selection): RegionStats {
+  const start = toTime(selection.timeStart);
+  const end = toTime(selection.timeEnd);
+  const sliced = bars.filter((b) => toTime(b.time) >= start && toTime(b.time) <= end);
+  if (sliced.length < 2) return { bar_count: sliced.length, return_pct: 0, trend: "震荡", volatility: "中等波动" };
+  const first = sliced[0].close;
+  const last = sliced[sliced.length - 1].close;
+  const ret = (last / first - 1) * 100;
+  const diffs = sliced.slice(1).map((b, i) => Math.abs(b.close - sliced[i].close) / sliced[i].close);
+  const std = Math.sqrt(diffs.reduce((s, v) => s + v * v, 0) / diffs.length);
+  return {
+    bar_count: sliced.length,
+    return_pct: ret,
+    trend: ret > 0.5 ? "上升趋势" : ret < -0.5 ? "下降趋势" : "震荡",
+    volatility: std >= 0.0012 ? "高波动" : std >= 0.0006 ? "中等波动" : "低波动",
+  };
+}
+
+export default function App() {
+  const [symbol, setSymbol] = useState("EURUSD");
+  const [symbols, setSymbols] = useState<string[]>(["EURUSD"]);
+  const [timeframe, setTimeframe] = useState("M15");
+  const [bars, setBars] = useState<Bar[]>([]);
+  const [snapshot, setSnapshot] = useState<{ current_price: number; change_pct_24h: number; atr: number; atr_pct: number } | null>(null);
+  const [indicators, setIndicators] = useState<IndicatorData | null>(null);
+  const [showIndicators, setShowIndicators] = useState(true);
+  const [mode, setMode] = useState<ChartMode>("pan");
+  const [selection, setSelection] = useState<Selection | null>(null);
+  const [entryPoints, setEntryPoints] = useState<MarkerPoint[]>([]);
+  const [exitPoints, setExitPoints] = useState<MarkerPoint[]>([]);
+  const [supportLevels, setSupportLevels] = useState<Array<{ price: number; label?: string; touched?: number }>>([]);
+  const [resistanceLevels, setResistanceLevels] = useState<Array<{ price: number; label?: string; touched?: number }>>([]);
+  const [markerHistory, setMarkerHistory] = useState<Array<{ type: "entry" | "exit"; point: MarkerPoint }>>([]);
+  const [levelHistory, setLevelHistory] = useState<Array<{ type: "support" | "resistance"; price: number }>>([]);
+  const [pendingExit, setPendingExit] = useState<MarkerPoint | null>(null);
+  const [draft, setDraft] = useState<FactorDraft | null>(null);
+  const [backtest, setBacktest] = useState<BacktestResult | null>(null);
+  const [factors, setFactors] = useState<Factor[]>([]);
+  const [scan, setScan] = useState<ScanResult | null>(null);
+  const [paperJobs, setPaperJobs] = useState<Array<Record<string, unknown>>>([]);
+  const [alerts, setAlerts] = useState<Alert[]>([]);
+  const [systemState, setSystemState] = useState<SystemState | null>(null);
+  const [aiStatus, setAiStatus] = useState<AiStatus | null>(null);
+  const [aiDialog, setAiDialog] = useState(false);
+  const [aiEditingId, setAiEditingId] = useState<string | null>(null);
+  const [aiTestingId, setAiTestingId] = useState<string | null>(null);
+  const [aiForm, setAiForm] = useState({
+    name: "",
+    provider: "openai",
+    model: "qwen3.8-max",
+    api_key: "",
+    base_url: "https://dashscope.aliyuncs.com/compatible-mode/v1",
+    roles: [] as string[],
+    enabled: true,
+  });
+  const [replay, setReplay] = useState<{ markdown: string; score: number; factor_name: string } | null>(null);
+  const [tradeRecords, setTradeRecords] = useState<Array<Record<string, unknown>>>([]);
+  const [backfilling, setBackfilling] = useState(false);
+  const [tab, setTab] = useState<MainTab>("factors");
+  const [subTab, setSubTab] = useState<SubTab>("mark");
+  const [toast, setToast] = useState<{ type: "success" | "error"; message: string } | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [selectedFactor, setSelectedFactor] = useState<Factor | null>(null);
+  const [editingFactor, setEditingFactor] = useState<Factor | null>(null);
+  const [sandboxResults, setSandboxResults] = useState<Record<string, { summary: string; staticOk: boolean; runtimeOk: boolean; message: string; suggestions: string[] }>>({});
+  const [matcherDialog, setMatcherDialog] = useState(false);
+  const [trailingLoaded, setTrailingLoaded] = useState(false);
+  const [trailingForm, setTrailingForm] = useState({
+    trailing_enabled: false,
+    trailing_unit: "atr",
+    initial_sltp_source: "pattern",
+    sl_tp_strategies: ["high_watermark"] as string[],
+    trailing_activation_pct: "0.3",
+    trailing_retrace_pct: "0.3",
+    trailing_take_retrace_pct: "0.3",
+    trailing_take_buffer_pct: "0.2",
+    trailing_activation_atr: "0.5",
+    trailing_stop_atr: "1.0",
+    trailing_take_atr: "0.5",
+    trailing_take_buffer_atr: "0.5",
+    hw_activation_profit: "200",
+    hw_max_retrace_pct: "20",
+    pc_tier1_profit: "400",
+    pc_tier1_close_pct: "50",
+    pc_tier2_profit: "1000",
+    pc_tier2_close_pct: "30",
+    pc_breakeven_buffer: "0.5",
+  });
+  const [matcherForm, setMatcherForm] = useState({
+    symbol,
+    timeframe,
+    min_confidence: "0.55",
+    direction: "both",
+    lot_mode: "risk",
+    fixed_lots: "0.01",
+    risk_percent: "1.0",
+    max_positions: "5",
+    stop_method: "atr",
+    take_method: "atr",
+    stop_atr_mult: "2.0",
+    take_atr_mult: "3.0",
+    stop_points: "0",
+    take_points: "0",
+    level_buffer_pct: "0.1",
+    take_level_buffer_pct: "0.1",
+    trailing_enabled: false,
+    trailing_unit: "atr",
+    initial_sltp_source: "pattern",
+    sl_tp_strategies: ["high_watermark"] as string[],
+    trailing_activation_pct: "0.3",
+    trailing_retrace_pct: "0.3",
+    trailing_take_retrace_pct: "0.3",
+    trailing_take_buffer_pct: "0.2",
+    trailing_activation_atr: "0.5",
+    trailing_stop_atr: "1.0",
+    trailing_take_atr: "0.5",
+    trailing_take_buffer_atr: "0.5",
+    hw_activation_profit: "200",
+    hw_max_retrace_pct: "20",
+    pc_tier1_profit: "400",
+    pc_tier1_close_pct: "50",
+    pc_tier2_profit: "1000",
+    pc_tier2_close_pct: "30",
+    pc_breakeven_buffer: "0.5",
+    delay_ms: "0",
+    auto_close_enabled: true,
+    alert_enabled: true,
+    max_daily_loss_pct: "3",
+    max_drawdown_pct: "20",
+    pattern_min_similarity: "0.85",
+    pattern_min_samples: "0",
+  });
+  const [backtestSettings, setBacktestSettings] = useState({
+    symbol,
+    timeframe,
+    bars: "500",
+    startTime: "",
+    endTime: "",
+    initialEquity: "10000",
+    leverage: "30",
+    delayMs: "0",
+    slippage: "0",
+  });
+  const [optSettings, setOptSettings] = useState({
+    objective: "composite",
+    maxIterations: "30",
+    earlyStop: "5",
+    walkForward: "1",
+    walkForwardFolds: "3",
+    minTrades: "0",
+    complexityPenalty: "0.01",
+    maxDeviation: "30",
+    fidelityWeight: "40",
+    beamWidth: "10",
+    searchRounds: "5",
+    paramRanges: "",
+    targetWinRate: "",
+    targetReturn: "",
+    targetProfitFactor: "",
+    targetMaxDrawdown: "",
+  });
+  const [optimizing, setOptimizing] = useState(false);
+  const [optimizeResult, setOptimizeResult] = useState<OptimizeResult | null>(null);
+
+  const regionStats = useMemo(() => (selection ? computeRegionStats(bars, selection) : null), [bars, selection]);
+
+  const notify = useCallback((type: "success" | "error", message: string) => {
+    setToast({ type, message });
+    window.setTimeout(() => setToast(null), 4200);
+  }, []);
+
+  const loadBars = useCallback(async () => {
+    try {
+      const data = await api.mt5Klines(symbol, timeframe, 500);
+      setBars(data.bars);
+      api.indicators(symbol, timeframe, 500).then(setIndicators).catch(() => {
+        // 指标加载失败不影响主图
+      });
+    } catch (err) {
+      notify("error", String(err instanceof Error ? err.message : err));
+    }
+  }, [symbol, timeframe, notify]);
+
+  const loadSymbols = useCallback(async () => {
+    try {
+      const res = await api.mt5Symbols();
+      setSymbols(res.symbols.length ? res.symbols : ["EURUSD"]);
+    } catch (err) {
+      notify("error", String(err instanceof Error ? err.message : err));
+    }
+  }, [notify]);
+
+  const loadSnapshot = useCallback(async () => {
+    try {
+      setSnapshot(await api.snapshot(symbol, timeframe));
+    } catch {
+      // 快照轮询失败不打断主流程
+    }
+  }, [symbol, timeframe]);
+
+  const loadFactors = useCallback(async () => {
+    try {
+      const data = await api.factors();
+      setFactors(data.factors);
+    } catch (err) {
+      notify("error", String(err instanceof Error ? err.message : err));
+    }
+  }, [notify]);
+
+  const loadSystem = useCallback(async () => {
+    try {
+      setSystemState(await api.systemState());
+    } catch {
+      // 忽略
+    }
+  }, []);
+
+  const loadAiStatus = useCallback(async () => {
+    try {
+      setAiStatus(await api.aiStatus());
+    } catch {
+      // 忽略
+    }
+  }, []);
+
+  const openAiDialog = useCallback((cfg?: AiConfig) => {
+    if (cfg) {
+      setAiEditingId(cfg.id);
+      setAiForm({
+        name: cfg.name,
+        provider: cfg.provider,
+        model: cfg.model,
+        api_key: "",
+        base_url: cfg.base_url,
+        roles: cfg.roles,
+        enabled: cfg.enabled,
+      });
+    } else {
+      setAiEditingId(null);
+      setAiForm({
+        name: "",
+        provider: "openai",
+        model: "qwen3.8-max",
+        api_key: "",
+        base_url: "https://dashscope.aliyuncs.com/compatible-mode/v1",
+        roles: [],
+        enabled: true,
+      });
+    }
+    setAiDialog(true);
+  }, []);
+
+  const handleAiSave = useCallback(async () => {
+    if (!aiForm.name.trim()) {
+      notify("error", "请填写 AI 名称备注");
+      return;
+    }
+    if (!aiEditingId && !aiForm.api_key.trim()) {
+      notify("error", "请填写 API Key");
+      return;
+    }
+    setBusy(true);
+    try {
+      const payload = { ...aiForm };
+      if (aiEditingId) {
+        await api.aiUpdateConfig(aiEditingId, payload);
+      } else {
+        await api.aiCreateConfig(payload);
+      }
+      setAiDialog(false);
+      await loadAiStatus();
+      notify("success", aiEditingId ? "AI 配置已更新" : "AI 配置已创建");
+    } catch (err) {
+      notify("error", String(err instanceof Error ? err.message : err));
+    } finally {
+      setBusy(false);
+    }
+  }, [aiForm, aiEditingId, loadAiStatus, notify]);
+
+  const handleAiTest = useCallback(async (id: string) => {
+    setAiTestingId(id);
+    try {
+      const result = await api.aiTestConfig(id);
+      notify(
+        result.success ? "success" : "error",
+        result.success
+          ? `AI 连接成功：${result.model}，延迟 ${result.latency_ms}ms`
+          : `AI 连接失败：${result.message}`
+      );
+    } catch (err) {
+      notify("error", String(err instanceof Error ? err.message : err));
+    } finally {
+      setAiTestingId(null);
+    }
+  }, [notify]);
+
+  const handleAiDelete = useCallback(async (cfg: AiConfig) => {
+    if (!window.confirm(`确认删除 AI 配置「${cfg.name}」？`)) return;
+    try {
+      await api.aiDeleteConfig(cfg.id);
+      await loadAiStatus();
+      notify("success", "AI 配置已删除");
+    } catch (err) {
+      notify("error", String(err instanceof Error ? err.message : err));
+    }
+  }, [loadAiStatus, notify]);
+
+  const loadAlerts = useCallback(async () => {
+    try {
+      const data = await api.alerts();
+      setAlerts(data.alerts);
+    } catch {
+      // 忽略
+    }
+  }, []);
+
+  const loadPaper = useCallback(async () => {
+    try {
+      const data = await api.paperState();
+      setPaperJobs(data.jobs);
+    } catch {
+      // 忽略
+    }
+  }, []);
+
+
+  const handleBackfillExtremes = useCallback(async () => {
+    setBackfilling(true);
+    try {
+      const result = await api.backfillExtremes();
+      notify("success", result.message);
+      await loadTrades();
+    } catch (err) {
+      notify("error", String(err instanceof Error ? err.message : err));
+    } finally {
+      setBackfilling(false);
+    }
+  }, [loadTrades, notify]);
+
+  const metric = backtest?.metrics;
+
+  return (
+    <div className="app">
+      <header className="topbar">
+        <div className="brand">
+          <span className="brand-mark"><Bot size={17} /></span>
+          外汇 AI 量化交易系统
+        </div>
+        <SymbolSearchSelect symbols={symbols} value={symbol} onChange={setSymbol} />
+        <div className="select-wrap">
+          <Activity size={13} />
+          <select value={timeframe} onChange={(e) => setTimeframe(e.target.value)}>
+            {TIMEFRAMES.map((t) => <option key={t} value={t}>{t}</option>)}
+          </select>
+        </div>
+        <div className="topbar-spacer" />
+        <span className="status-pill"><span className={`dot ${systemState?.matcher_running ? "on" : ""}`} /> 实盘匹配 {systemState?.matcher_running ? "运行中" : "已暂停"}</span>
+        <span className="status-pill"><span className={`dot ${systemState?.active_positions ? "warn" : ""}`} /> 持仓 {systemState?.active_positions ?? 0}</span>
+        <span className="status-pill"><span className="dot on" /> 行情实时</span>
+        <span className={`status-pill ai-pill ${aiStatus?.enabled_count ? "ai-on" : aiStatus?.configured ? "ai-warn" : ""}`}>
+          <span className={`dot ${aiStatus?.enabled_count ? "on" : aiStatus?.configured ? "warn" : ""}`} />
+          AI {aiStatus?.enabled_count ? `已配置 ${aiStatus.configs.find((c) => c.enabled)?.model ?? ""}` : aiStatus?.configured ? "未启用" : "未配置"}
+        </span>
+        <span className="status-pill"><Wallet size={13} /> MT5 账户 {systemState?.account_login ?? "--"} 权益 ${(systemState?.account_equity ?? 0).toLocaleString(undefined, { minimumFractionDigits: 2 })}</span>
+        <button className={`btn ${systemState?.matcher_running ? "danger" : "primary"}`} onClick={handleMatcherToggle}>
+          {systemState?.matcher_running ? <StopCircle size={14} /> : <Play size={14} />}
+          {systemState?.matcher_running ? "暂停系统交易" : "启动实盘匹配"}
+        </button>
+        <button className="btn danger" onClick={handleCloseAll}>
+          <Square size={14} /> 一键平仓
+        </button>
+      </header>
+
+      <div className="main">
+        <section className="chart-zone">
+          <div className="action-bar">
+            <button className={`btn ${mode === "select" ? "active" : ""}`} onClick={() => setMode("select")}>
+              <BoxSelect size={14} /> 框选形态
+            </button>
+            <button className={`btn ${mode === "entry" ? "active" : ""}`} onClick={() => setMode("entry")}>
+              <Sparkles size={14} /> 标记入场点
+            </button>
+            <button className={`btn ${mode === "exit" ? "active" : ""}`} onClick={() => setMode("exit")}>
+              <Ban size={14} /> 标记出场点
+            </button>
+            <button className={`btn ${mode === "resistance" ? "active" : ""}`} onClick={() => setMode("resistance")}>
+              <Ban size={14} /> 标记压力位
+            </button>
+            <button className={`btn ${mode === "support" ? "active" : ""}`} onClick={() => setMode("support")}>
+              <Sparkles size={14} /> 标记支撑位
+            </button>
+            <button className="btn" disabled={!selection || supportLevels.length === 0 || resistanceLevels.length === 0} onClick={handleSuggestPoints}>
+              <Sparkles size={14} /> 自动建议入场/出场
+            </button>
+            <button className="btn" onClick={resetSelection}>
+              <RefreshCw size={14} /> 重置框选
+            </button>
+            <button className="btn" disabled={markerHistory.length === 0 && levelHistory.length === 0} onClick={handleUndoMarker}>
+              <Undo2 size={14} /> 撤销标记
+            </button>
+            <button className="btn" disabled={entryPoints.length === 0 && exitPoints.length === 0 && supportLevels.length === 0 && resistanceLevels.length === 0} onClick={handleClearMarkers}>
+              <X size={14} /> 清除标注
+            </button>
+            <button className="btn" disabled={!selection} onClick={handleClearSelection}>
+              <X size={14} /> 取消框选
+            </button>
+            <span className="btn-sep" />
+            <button className="btn primary" disabled={busy} onClick={handleGenerate}>
+              <Bot size={14} /> 提取并生成 AI 因子
+            </button>
+            <button className="btn" disabled={busy || !draft} onClick={handleBacktest}>
+              <TestTube2 size={14} /> 运行历史回测
+            </button>
+            <button className="btn" disabled={busy || !draft} onClick={handleSave}>
+              <Save size={14} /> 存入因子特征库
+            </button>
+            <span className="btn-sep" />
+            <button className={`btn ${showIndicators ? "active" : ""}`} onClick={() => setShowIndicators((v) => !v)}>
+              <Activity size={14} /> 指标叠加
+            </button>
+            <button className="btn" disabled={!selectedFactor} onClick={() => selectedFactor && viewFactor(selectedFactor)}>
+              <Eye size={14} /> 查看因子逻辑
+            </button>
+            <button className="btn" disabled={!selectedFactor} onClick={() => selectedFactor && disableFactor(selectedFactor)}>
+              <StopCircle size={14} /> 禁用此因子
+            </button>
+            <span className="btn-sep" />
+            {snapshot && (
+              <span className="status-pill">
+                最新价 <strong>{snapshot.current_price.toFixed(5)}</strong>
+                <span className={snapshot.change_pct_24h >= 0 ? "pnl-pos" : "pnl-neg"}>{snapshot.change_pct_24h >= 0 ? "▲" : "▼"}{Math.abs(snapshot.change_pct_24h).toFixed(3)}%</span>
+              </span>
+            )}
+          </div>
+          <KLineChart
+            bars={bars}
+            selection={selection}
+            entryPoints={entryPoints}
+            exitPoints={exitPoints}
+            supportLevels={supportLevels}
+            resistanceLevels={resistanceLevels}
+            mode={mode}
+            regionStats={regionStats}
+            indicators={indicators}
+            showIndicators={showIndicators}
+            onSelection={setSelection}
+            onPoint={handleAddPoint}
+            onLevel={handleAddLevel}
+            onMode={setMode}
+          />
+        </section>
+
+        <aside className="sidebar">
+          <div className="tabs">
+            <button className={`tab ${tab === "factors" ? "active" : ""}`} onClick={() => { setTab("factors"); setSubTab("mark"); }}><Bot size={14} /> 因子工作台</button>
+            <button className={`tab ${tab === "trading" ? "active" : ""}`} onClick={() => { setTab("trading"); setSubTab("signals"); }}><Activity size={14} /> 交易中心</button>
+            <button className={`tab ${tab === "replay" ? "active" : ""}`} onClick={() => { setTab("replay"); setSubTab("replay"); }}><FileText size={14} /> 复盘与日志</button>
+            <button className={`tab ${tab === "ai" ? "active" : ""}`} onClick={() => setTab("ai")}><Cpu size={14} /> AI 管理</button>
+          </div>
+
+          <div className="panel-body">
+            {tab === "factors" && (
+              <div className="sub-tabs">
+                <button className={`sub-tab ${subTab === "mark" ? "active" : ""}`} onClick={() => setSubTab("mark")}>形态标注</button>
+                <button className={`sub-tab ${subTab === "backtest" ? "active" : ""}`} onClick={() => setSubTab("backtest")}>回测与优化</button>
+                <button className={`sub-tab ${subTab === "manage" ? "active" : ""}`} onClick={() => setSubTab("manage")}>因子管理</button>
+              </div>
+            )}
+            {tab === "factors" && subTab === "mark" && (
+              <>
+                {!draft ? (
+                  <div className="empty">尚未生成因子</div>
+                ) : (
+                  <div className="tool-block">
+                    <h3><Sparkles size={13} /> 逆向因子草稿</h3>
+                    <p className="factor-desc">{draft.description}</p>
+                    <div className="metric-grid" style={{ marginBottom: 10 }}>
+                      <div className="metric"><div className="label">沙盒检查</div><div className={`value ${draft.sandbox?.ok ? "good" : draft.sandbox ? "bad" : ""}`}>{draft.sandbox?.ok ? "通过" : draft.sandbox ? "未通过" : "待校验"}</div></div>
+                      <div className="metric"><div className="label">入场信号</div><div className="value">{draft.execution?.entry_count ?? 0}</div></div>
+                      <div className="metric"><div className="label">生成模型</div><div className="value" style={{ fontSize: 11 }}>{draft.model}</div></div>
+                    </div>
+                    <code className="code-block">{draft.code}</code>
+                  </div>
+                )}
+              </>
+            )}
+
+            {tab === "factors" && subTab === "backtest" && (
+              <>
+                <div className="tool-block">
+                  <h3><TestTube2 size={13} /> 回测与参数优化</h3>
+                    <div className="opt-section-title">数据与执行参数</div>
+                    <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8 }}>
+                      <div>
+                        <label className="field-label">交易品种（默认跟随框选）</label>
+                        <SymbolSearchSelect symbols={symbols} value={backtestSettings.symbol} onChange={(s) => setBacktestSettings((v) => ({ ...v, symbol: s }))} />
+                      </div>
+                      <div>
+                        <label className="field-label">K线周期</label>
+                        <select className="form-input" value={backtestSettings.timeframe} onChange={(e) => setBacktestSettings((v) => ({ ...v, timeframe: e.target.value }))}>
+                          {TIMEFRAMES.map((t) => <option key={t} value={t}>{t}</option>)}
+                        </select>
+                      </div>
+                      <div>
+                        <label className="field-label">开始时间（可空）</label>
+                        <input className="form-input" type="datetime-local" value={backtestSettings.startTime} onChange={(e) => setBacktestSettings((v) => ({ ...v, startTime: e.target.value }))} />
+                      </div>
+                      <div>
+                        <label className="field-label">结束时间（可空，默认当前）</label>
+                        <input className="form-input" type="datetime-local" value={backtestSettings.endTime} onChange={(e) => setBacktestSettings((v) => ({ ...v, endTime: e.target.value }))} />
+                      </div>
+                      <div>
+                        <label className="field-label">测试K线数量（到当前）</label>
+                        <input className="form-input" type="number" min="10" value={backtestSettings.bars} onChange={(e) => setBacktestSettings((v) => ({ ...v, bars: e.target.value }))} />
+                      </div>
+                      <div>
+                        <label className="field-label">入金（初始权益）</label>
+                        <input className="form-input" type="number" placeholder="入金" value={backtestSettings.initialEquity} onChange={(e) => setBacktestSettings((v) => ({ ...v, initialEquity: e.target.value }))} />
+                      </div>
+                      <div>
+                        <label className="field-label">杠杆</label>
+                        <input className="form-input" type="number" placeholder="杠杆" value={backtestSettings.leverage} onChange={(e) => setBacktestSettings((v) => ({ ...v, leverage: e.target.value }))} />
+                      </div>
+                      <div>
+                        <label className="field-label">执行延迟（毫秒）</label>
+                        <input className="form-input" type="number" placeholder="延迟(ms)" value={backtestSettings.delayMs} onChange={(e) => setBacktestSettings((v) => ({ ...v, delayMs: e.target.value }))} />
+                      </div>
+                      <div>
+                        <label className="field-label">滑点（点）</label>
+                        <input className="form-input" type="number" min="0" step="0.1" value={backtestSettings.slippage} onChange={(e) => setBacktestSettings((v) => ({ ...v, slippage: e.target.value }))} />
+                      </div>
+                    </div>
+                    <div className="row-actions" style={{ marginTop: 8 }}>
+                      <button className="mini-btn primary" disabled={busy || !draft} onClick={handleCustomBacktest}>运行回测</button>
+                      <button className="mini-btn primary" disabled={optimizing || !draft} onClick={handleOptimize}>{optimizing ? "优化中..." : "运行优化并回测"}</button>
+                    </div>
+                  </div>
+                  <div className="tool-block">
+                      <h3><Sparkles size={13} /> 优化参数设置</h3>
+                      <div className="opt-section-title">优化目标与搜索范围（与上方数据共用）</div>
+                    <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8 }}>
+                      <div>
+                        <label className="field-label">优化目标（评分方式）</label>
+                        <select className="form-input" value={optSettings.objective} onChange={(e) => setOptSettings((v) => ({ ...v, objective: e.target.value }))}>
+                          <option value="composite">综合评分</option>
+                          <option value="win_rate">最高胜率</option>
+                          <option value="profit">最高盈利</option>
+                        </select>
+                      </div>
+                      <div>
+                        <label className="field-label">最大迭代次数</label>
+                        <input className="form-input" type="number" min="1" value={optSettings.maxIterations} onChange={(e) => setOptSettings((v) => ({ ...v, maxIterations: e.target.value }))} />
+                      </div>
+                      <div>
+                        <label className="field-label">提前停止轮次（连续无改进）</label>
+                        <input className="form-input" type="number" min="0" value={optSettings.earlyStop} onChange={(e) => setOptSettings((v) => ({ ...v, earlyStop: e.target.value }))} />
+                      </div>
+                      <div>
+                        <label className="field-label">样本外验证（walk-forward）</label>
+                        <select className="form-input" value={optSettings.walkForward} onChange={(e) => setOptSettings((v) => ({ ...v, walkForward: e.target.value }))}>
+                          <option value="1">启用</option>
+                          <option value="0">关闭</option>
+                        </select>
+                      </div>
+                      <div>
+                        <label className="field-label">滚动样本外段数</label>
+                        <input className="form-input" type="number" min="1" value={optSettings.walkForwardFolds} onChange={(e) => setOptSettings((v) => ({ ...v, walkForwardFolds: e.target.value }))} />
+                      </div>
+                      <div>
+                        <label className="field-label">最低交易数</label>
+                        <input className="form-input" type="number" min="0" value={optSettings.minTrades} onChange={(e) => setOptSettings((v) => ({ ...v, minTrades: e.target.value }))} />
+                      </div>
+                      <div>
+                        <label className="field-label">参数复杂度惩罚（每参数）</label>
+                        <input className="form-input" type="number" min="0" step="0.001" value={optSettings.complexityPenalty} onChange={(e) => setOptSettings((v) => ({ ...v, complexityPenalty: e.target.value }))} />
+                      </div>
+                      <div>
+                        <label className="field-label">最大参数偏离 %</label>
+                        <input className="form-input" type="number" min="0" max="100" value={optSettings.maxDeviation} onChange={(e) => setOptSettings((v) => ({ ...v, maxDeviation: e.target.value }))} />
+                      </div>
+                      <div>
+                        <label className="field-label">形态保真度权重 %</label>
+                        <input className="form-input" type="number" min="0" max="100" value={optSettings.fidelityWeight} onChange={(e) => setOptSettings((v) => ({ ...v, fidelityWeight: e.target.value }))} />
+                      </div>
+                      <div>
+                        <label className="field-label">束搜索保留候选数</label>
+                        <input className="form-input" type="number" min="1" value={optSettings.beamWidth} onChange={(e) => setOptSettings((v) => ({ ...v, beamWidth: e.target.value }))} />
+                      </div>
+                      <div>
+                        <label className="field-label">组合探索轮数</label>
+                        <input className="form-input" type="number" min="0" value={optSettings.searchRounds} onChange={(e) => setOptSettings((v) => ({ ...v, searchRounds: e.target.value }))} />
+                      </div>
+                      <div>
+                        <label className="field-label">目标胜率 %（留空=不限）</label>
+                        <input className="form-input" type="number" min="0" value={optSettings.targetWinRate} onChange={(e) => setOptSettings((v) => ({ ...v, targetWinRate: e.target.value }))} />
+                      </div>
+                      <div>
+                        <label className="field-label">目标收益 %（留空=不限）</label>
+                        <input className="form-input" type="number" value={optSettings.targetReturn} onChange={(e) => setOptSettings((v) => ({ ...v, targetReturn: e.target.value }))} />
+                      </div>
+                      <div>
+                        <label className="field-label">目标盈亏比（留空=不限）</label>
+                        <input className="form-input" type="number" min="0" step="0.1" value={optSettings.targetProfitFactor} onChange={(e) => setOptSettings((v) => ({ ...v, targetProfitFactor: e.target.value }))} />
+                      </div>
+                      <div>
+                        <label className="field-label">最大回撤 %（留空=不限）</label>
+                        <input className="form-input" type="number" min="0" value={optSettings.targetMaxDrawdown} onChange={(e) => setOptSettings((v) => ({ ...v, targetMaxDrawdown: e.target.value }))} />
+                      </div>
+                      <div style={{ gridColumn: "1 / -1" }}>
+                        <label className="field-label">{'参数范围 JSON（留空=按当前参数自动生成，格式如 {"lookback":{"min":10,"max":40,"step":5}}）'}</label>
+                        <textarea className="form-input modal-textarea" value={optSettings.paramRanges} onChange={(e) => setOptSettings((v) => ({ ...v, paramRanges: e.target.value }))} />
+                      </div>
+                    </div>
+                    {optimizeResult && (
+                      <div style={{ marginTop: 10, display: "flex", flexDirection: "column", gap: 8 }}>
+                        <p className={`factor-desc ${optimizeResult.targets_reached ? "pnl-pos" : "pnl-neg"}`}>
+                          {optimizeResult.targets_reached ? "目标已达成" : "未达到目标，已返回最接近参数"} | 最优评分 {optimizeResult.score.toFixed(4)} | {optimizeResult.stop_reason}
+                        </p>
+                        <p className="factor-desc">
+                          目标：胜率 ≥{optimizeResult.targets.win_rate_pct || "不限"}% | 收益 ≥{optimizeResult.targets.total_return_pct || "不限"}% | 盈亏比 ≥{optimizeResult.targets.profit_factor || "不限"} | 回撤 ≤{optimizeResult.targets.max_drawdown_pct}% | 达标组数 {optimizeResult.satisfied_trials}
+                        </p>
+                      <code className="code-block">最佳参数：{JSON.stringify(optimizeResult.best_params, null, 2)}</code>
+                        <div className="metric-grid">
+                          <div className="metric"><div className="label">胜率</div><div className="value">{optimizeResult.best_metrics.win_rate_pct.toFixed(1)}%</div></div>
+                          <div className="metric"><div className="label">形态保真度</div><div className="value">{(optimizeResult.fidelity ?? 0) * 100 >= 0 ? `${((optimizeResult.fidelity ?? 0) * 100).toFixed(0)}%` : "--"}</div></div>
+                        <div className="metric"><div className="label">总收益</div><div className={`value ${optimizeResult.best_metrics.total_return_pct >= 0 ? "good" : "bad"}`}>{optimizeResult.best_metrics.total_return_pct.toFixed(2)}%</div></div>
+                        <div className="metric"><div className="label">盈亏比</div><div className="value">{optimizeResult.best_metrics.profit_factor.toFixed(2)}</div></div>
+                          <div className="metric"><div className="label">最大回撤</div><div className="value bad">-{optimizeResult.best_metrics.max_drawdown_pct.toFixed(2)}%</div></div>
+                        </div>
+                        {optimizeResult.test_metrics && (
+                          <div className="metric-grid">
+                            <div className="metric"><div className="label">样本外胜率</div><div className="value">{optimizeResult.test_metrics.win_rate_pct.toFixed(1)}%</div></div>
+                            <div className="metric"><div className="label">样本外收益</div><div className={`value ${optimizeResult.test_metrics.total_return_pct >= 0 ? "good" : "bad"}`}>{optimizeResult.test_metrics.total_return_pct.toFixed(2)}%</div></div>
+                            <div className="metric"><div className="label">样本外盈亏比</div><div className="value">{optimizeResult.test_metrics.profit_factor.toFixed(2)}</div></div>
+                            <div className="metric"><div className="label">样本外回撤</div><div className="value bad">-{optimizeResult.test_metrics.max_drawdown_pct.toFixed(2)}%</div></div>
+                          </div>
+                        )}
+                        {optimizeResult.walk_forward_metrics && optimizeResult.walk_forward_metrics.length > 0 && (
+                          <p className="factor-desc">
+                            滚动样本外验证：{optimizeResult.walk_forward_metrics.length} 段 | 平均胜率 {(() => { const arr = optimizeResult.walk_forward_metrics ?? []; return arr.length ? (arr.reduce((s, m) => s + m.win_rate_pct, 0) / arr.length).toFixed(1) : "0"; })()}% | 平均收益 {(() => { const arr = optimizeResult.walk_forward_metrics ?? []; return arr.length ? (arr.reduce((s, m) => s + m.total_return_pct, 0) / arr.length).toFixed(2) : "0"; })()}%
+                          </p>
+                        )}
+                      <div className="row-actions">
+                        <button className="mini-btn primary" disabled={busy} onClick={handleApplyBestParams}>应用最佳参数并回测</button>
+                      </div>
+                      {optimizeResult.trials.length > 0 && (
+                        <div className="factor-list">
+                          {optimizeResult.trials.slice(0, 5).map((t, i) => (
+                            <div className="trade-row" key={i}>
+                              <div><div className="t-label">参数</div><div className="t-value">{JSON.stringify(t.params)}</div></div>
+                              <div><div className="t-label">评分</div><div className="t-value">{t.score.toFixed(4)}</div></div>
+                              <div className="badge active">胜率 {t.metrics.win_rate_pct.toFixed(0)}%</div>
+                            </div>
+                          ))}
+                        </div>
+                      )}
+                    </div>
+                  )}
+                </div>
+                {!backtest || !metric ? (
+                  <div className="empty">点击[运行历史回测]查看绩效指标与逐笔交易明细。</div>
+                ) : (
+                  <>
+                    <div className="tool-block">
+                      <h3><TestTube2 size={13} /> 回测绩效</h3>
+                      <div className="metric-grid">
+                        <div className="metric"><div className="label">总收益率</div><div className={`value ${metric.total_return_pct >= 0 ? "good" : "bad"}`}>{metric.total_return_pct.toFixed(2)}%</div></div>
+                        <div className="metric"><div className="label">夏普比率</div><div className="value">{metric.sharpe.toFixed(2)}</div></div>
+                        <div className="metric"><div className="label">最大回撤</div><div className="value bad">-{metric.max_drawdown_pct.toFixed(2)}%</div></div>
+                        <div className="metric"><div className="label">胜率</div><div className="value">{metric.win_rate_pct.toFixed(1)}%</div></div>
+                        <div className="metric"><div className="label">盈亏比</div><div className="value">{metric.profit_factor.toFixed(2)}</div></div>
+                        <div className="metric"><div className="label">交易次数</div><div className="value">{metric.num_trades}</div></div>
+                      </div>
+                    </div>
+                    <div className="tool-block">
+                      <h3><Layers size={13} /> 逐笔交易</h3>
+                      <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+                        {backtest.trades.slice(-8).reverse().map((t, i) => (
+                          <div key={i} className="trade-row">
+                            <div><div className="t-label">{t.side === "long" ? "多头" : "空头"} 入场</div><div className="t-value">{new Date(t.entry_time).toLocaleString()}</div></div>
+                            <div><div className="t-label">出场原因</div><div className="t-value">{t.exit_reason}</div></div>
+                            <div className={t.pnl_pct && t.pnl_pct >= 0 ? "pnl-pos" : "pnl-neg"}>
+                              <div className="t-label">盈亏</div>
+                              <div className="t-value">{t.pnl?.toFixed(2)}</div>
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  </>
+                )}
+              </>
+            )}
+
+            {tab === "factors" && subTab === "manage" && (
+              <>
+                <div className="row-actions" style={{ marginBottom: 8 }}>
+                  <button className="mini-btn danger" onClick={handleClearFactors}><Trash2 size={12} /> 清空因子库</button>
+                </div>
+                <div className="factor-list">
+                  {factors.length === 0 && <div className="empty">因子库为空，生成并存入首个因子后即可在这里管理。</div>}
+                  {factors.map((f) => (
+                    <div className="factor-card" key={f.id}>
+                      <div className="factor-card-head">
+                        <h4>{f.name}</h4>
+                        <span className={`badge ${f.status}`}>{f.status === "active" ? "启用" : "禁用"}</span>
+                      </div>
+                      <p>{f.description}</p>
+                      <div className="row-actions">
+                        <button className="mini-btn" onClick={() => viewFactor(f)}><Eye size={12} /> 查看因子逻辑</button>
+                        <button className="mini-btn" onClick={() => handleSandboxTest(f)}><ShieldCheck size={12} /> 沙盒测试</button>
+                        <button className="mini-btn" onClick={() => setEditingFactor(f)}><Pencil size={12} /> 编辑</button>
+                        <button className="mini-btn danger" onClick={() => handleDeleteFactor(f)}><Trash2 size={12} /> 删除</button>
+                        {f.status === "active" ? (
+                          <button className="mini-btn" onClick={() => disableFactor(f)}><StopCircle size={12} /> 禁用此因子</button>
+                        ) : (
+                          <button className="mini-btn primary" onClick={async () => { await api.enableFactor(f.id); await loadFactors(); notify("success", "因子已启用"); }}><CheckCircle2 size={12} /> 启用因子</button>
+                        )}
+                          <button className="mini-btn primary" onClick={() => { setSelectedFactor(f); setTab("trading"); setSubTab("signals"); }}><Activity size={12} /> 模拟盘</button>
+                      </div>
+                      {sandboxResults[f.id] && (
+                        <p className={`factor-desc ${sandboxResults[f.id].summary.includes("通过") ? "pnl-pos" : "pnl-neg"}`}>
+                          {sandboxResults[f.id].summary}
+                          {sandboxResults[f.id].message && `：${sandboxResults[f.id].message}`}
+                        </p>
+                      )}
+                    </div>
+                  ))}
+                </div>
+              </>
+            )}
+
+            {tab === "trading" && (
+              <div className="sub-tabs">
+                <button className={`sub-tab ${subTab === "signals" ? "active" : ""}`} onClick={() => setSubTab("signals")}>信号与执行</button>
+                <button className={`sub-tab ${subTab === "mt5" ? "active" : ""}`} onClick={() => setSubTab("mt5")}>实盘下单</button>
+              </div>
+            )}
+            {tab === "trading" && subTab === "signals" && (
+              <>
+                <div className="tool-block">
+                  <h3><Activity size={13} /> 市场环境</h3>
+                  <div className="metric-grid">
+                    <div className="metric"><div className="label">环境分类</div><div className="value" style={{ fontSize: 12 }}>{scan?.regime ?? "未扫描"}</div></div>
+                    <div className="metric"><div className="label">扫描因子</div><div className="value">{scan?.scanned ?? 0}</div></div>
+                    <div className="metric"><div className="label">候选信号</div><div className="value">{scan?.candidates.length ?? 0}</div></div>
+                  </div>
+                  {scan?.regime_detail && <p className="factor-desc">{scan.regime_detail}</p>}
+                  <div className="row-actions">
+                    <button className="mini-btn" onClick={handleScan}><RefreshCw size={12} /> 立即扫描</button>
+                    <button className="mini-btn primary" disabled={!selectedFactor} onClick={handleStartPaper}><Play size={12} /> 启动模拟盘</button>
+                    <button className="mini-btn" onClick={handleStopPaper}><StopCircle size={12} /> 暂停模拟盘</button>
+                  </div>
+                </div>
+                {systemState?.risk_tripped && (
+                  <div style={{ padding: 10, borderRadius: 6, border: "1px solid var(--red)", background: "rgba(239,98,98,0.12)", color: "var(--red)", fontSize: 12, display: "flex", gap: 6, alignItems: "center" }}>
+                    <Shield size={14} /> 风控熔断已触发，实盘匹配已自动暂停：{systemState.risk_reasons?.join("；") || "单日亏损或回撤超限"}
+                  </div>
+                )}
+                <div className="tool-block">
+                  <h3><Bot size={13} /> AI 自动执行</h3>
+                  <div className="metric-grid">
+                    <div className="metric"><div className="label">执行状态</div><div className={`value ${systemState?.executor_enabled ? "good" : "bad"}`}>{systemState?.executor_enabled ? "已开启" : "已关闭"}</div></div>
+                    <div className="metric"><div className="label">匹配品种/周期</div><div className="value" style={{ fontSize: 11 }}>{systemState?.matcher_symbol ?? "--"} / {systemState?.matcher_timeframe ?? "--"}</div></div>
+                    <div className="metric"><div className="label">最近执行</div><div className="value">{systemState?.last_executions.length ?? 0}</div></div>
+                    <div className="metric"><div className="label">最近失败</div><div className={`value ${systemState && systemState.executor_failures.length ? "bad" : "good"}`}>{systemState?.executor_failures.length ?? 0}</div></div>
+                  </div>
+                  <div className="row-actions">
+                    <button className="mini-btn primary" onClick={handleExecutorToggle}>{systemState?.executor_enabled ? "关闭 AI 自动执行" : "开启 AI 自动执行"}</button>
+                    <button className="mini-btn" onClick={handleExecutorScan}><RefreshCw size={12} /> 立即扫描并执行</button>
+                  </div>
+                  {systemState && systemState.last_executions.length > 0 && (
+                    <div style={{ display: "flex", flexDirection: "column", gap: 6, marginTop: 8 }}>
+                      {systemState.last_executions.slice(0, 5).map((ex) => (
+                        <div className="trade-row" key={ex.order_id}>
+                          <div><div className="t-label">{ex.factor_name}</div><div className="t-value">{ex.symbol} {ex.side === "buy" ? "买入" : "卖出"} {ex.lots} 手</div></div>
+                          <div><div className="t-label">置信度</div><div className="t-value">{(ex.confidence * 100).toFixed(0)}%</div></div>
+                          <div><div className="t-label">止损/止盈</div><div className="t-value">{ex.stop ? ex.stop.toFixed(5) : "--"} / {ex.take ? ex.take.toFixed(5) : "--"}</div></div>
+                          <div className="badge active">#{ex.order_id.slice(0, 6)}</div>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
+                {systemState?.last_scan && systemState.last_scan.pattern_matches && systemState.last_scan.pattern_matches.length > 0 && (
+                  <div className="tool-block">
+                    <h3><Shield size={13} /> 相似形态</h3>
+                    <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+                      {systemState.last_scan.pattern_matches.slice(0, 5).map((m) => (
+                        <div className="trade-row" key={m.case_id}>
+                          <div>
+                            <div className="t-label">{m.pattern_type || m.factor_name || "未关联因子"}</div>
+                            <div className="t-value">相似度 {(m.similarity * 100).toFixed(0)}% | 置信度 {((m.recognition_confidence ?? 0) * 100).toFixed(0)}% | 样本 {m.sample_count ?? 0}</div>
+                          </div>
+                          <div>
+                            <div className="t-label">建议止损/止盈</div>
+                            <div className="t-value">
+                              {m.learned.suggested_stop_pct ? `${(Number(m.learned.suggested_stop_pct) * 100).toFixed(2)}% / ${(Number(m.learned.suggested_take_pct) * 100).toFixed(2)}%` : "--"}
+                            </div>
+                          </div>
+                          <div className="badge active">胜率 {m.win_rate ?? 0}% | 期望 {m.expected_value ?? 0} | 持仓 {Number(m.learned.avg_hold_bars || 0).toFixed(1)} 根</div>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
+                <div className="tool-block">
+                  <h3><Shield size={13} /> 持仓保护（独立于实盘匹配）</h3>
+                  <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                    <label className="field-label" style={{ margin: 0 }}>移动止损/止盈</label>
+                    <input type="checkbox" checked={trailingForm.trailing_enabled} onChange={(e) => setTrailingForm((v) => ({ ...v, trailing_enabled: e.target.checked }))} />
+                  </div>
+                  <div style={{ gridColumn: "1 / -1", display: "flex", flexDirection: "column", gap: 6 }}>
+                    <label className="field-label" style={{ margin: 0 }}>止损止盈策略（可多选）</label>
+                    <div style={{ display: "flex", gap: 12 }}>
+                      <label style={{ display: "flex", alignItems: "center", gap: 5, fontSize: 12 }}>
+                        <input type="checkbox" checked={trailingForm.sl_tp_strategies.includes("high_watermark")} onChange={(e) => setTrailingForm((v) => ({ ...v, sl_tp_strategies: e.target.checked ? [...v.sl_tp_strategies, "high_watermark"] : v.sl_tp_strategies.filter((s) => s !== "high_watermark") }))} />
+                        最高浮盈回落
+                      </label>
+                      <label style={{ display: "flex", alignItems: "center", gap: 5, fontSize: 12 }}>
+                        <input type="checkbox" checked={trailingForm.sl_tp_strategies.includes("partial_close")} onChange={(e) => setTrailingForm((v) => ({ ...v, sl_tp_strategies: e.target.checked ? [...v.sl_tp_strategies, "partial_close"] : v.sl_tp_strategies.filter((s) => s !== "partial_close") }))} />
+                        分批落袋 + 移动保平
+                      </label>
+                    </div>
+                  </div>
+                  {trailingForm.sl_tp_strategies.includes("high_watermark") && (
+                    <div style={{ gridColumn: "1 / -1", display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8 }}>
+                      <div>
+                        <label className="field-label">回落激活浮盈 $/手</label>
+                        <input className="form-input" type="number" min="0" value={trailingForm.hw_activation_profit} onChange={(e) => setTrailingForm((v) => ({ ...v, hw_activation_profit: e.target.value }))} />
+                      </div>
+                      <div>
+                        <label className="field-label">高位回落比例 %</label>
+                        <input className="form-input" type="number" min="0" value={trailingForm.hw_max_retrace_pct} onChange={(e) => setTrailingForm((v) => ({ ...v, hw_max_retrace_pct: e.target.value }))} />
+                      </div>
+                    </div>
+                  )}
+                  {trailingForm.sl_tp_strategies.includes("partial_close") && (
+                    <div style={{ gridColumn: "1 / -1", display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8 }}>
+                      <div>
+                        <label className="field-label">第一档落袋浮盈 $/手</label>
+                        <input className="form-input" type="number" min="0" value={trailingForm.pc_tier1_profit} onChange={(e) => setTrailingForm((v) => ({ ...v, pc_tier1_profit: e.target.value }))} />
+                      </div>
+                      <div>
+                        <label className="field-label">第一档平仓比例 %</label>
+                        <input className="form-input" type="number" min="0" max="100" value={trailingForm.pc_tier1_close_pct} onChange={(e) => setTrailingForm((v) => ({ ...v, pc_tier1_close_pct: e.target.value }))} />
+                      </div>
+                      <div>
+                        <label className="field-label">第二档落袋浮盈 $/手</label>
+                        <input className="form-input" type="number" min="0" value={trailingForm.pc_tier2_profit} onChange={(e) => setTrailingForm((v) => ({ ...v, pc_tier2_profit: e.target.value }))} />
+                      </div>
+                      <div>
+                        <label className="field-label">第二档平仓比例 %</label>
+                        <input className="form-input" type="number" min="0" max="100" value={trailingForm.pc_tier2_close_pct} onChange={(e) => setTrailingForm((v) => ({ ...v, pc_tier2_close_pct: e.target.value }))} />
+                      </div>
+                      <div>
+                        <label className="field-label">保本缓冲 $</label>
+                        <input className="form-input" type="number" step="0.1" min="0" value={trailingForm.pc_breakeven_buffer} onChange={(e) => setTrailingForm((v) => ({ ...v, pc_breakeven_buffer: e.target.value }))} />
+                      </div>
+                    </div>
+                  )}
+                  {trailingForm.trailing_enabled && (
+                    <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8, marginTop: 8 }}>
+                      <div style={{ gridColumn: "1 / -1" }}>
+                        <label className="field-label">距离单位</label>
+                        <select className="form-input" value={trailingForm.trailing_unit} onChange={(e) => setTrailingForm((v) => ({ ...v, trailing_unit: e.target.value }))}>
+                          <option value="atr">ATR（推荐黄金）</option>
+                          <option value="pct">百分比</option>
+                        </select>
+                      </div>
+                      {trailingForm.trailing_unit === "atr" ? (
+                        <>
+                          <div>
+                            <label className="field-label">激活盈利（ATR）</label>
+                            <input className="form-input" type="number" step="0.1" min="0" value={trailingForm.trailing_activation_atr} onChange={(e) => setTrailingForm((v) => ({ ...v, trailing_activation_atr: e.target.value }))} />
+                          </div>
+                          <div>
+                            <label className="field-label">止损追踪（ATR）</label>
+                            <input className="form-input" type="number" step="0.1" min="0" value={trailingForm.trailing_stop_atr} onChange={(e) => setTrailingForm((v) => ({ ...v, trailing_stop_atr: e.target.value }))} />
+                          </div>
+                          <div>
+                            <label className="field-label">止盈顺势（ATR）</label>
+                            <input className="form-input" type="number" step="0.1" min="0" value={trailingForm.trailing_take_atr} onChange={(e) => setTrailingForm((v) => ({ ...v, trailing_take_atr: e.target.value }))} />
+                          </div>
+                          <div>
+                            <label className="field-label">止盈锁仓缓冲（ATR）</label>
+                            <input className="form-input" type="number" step="0.1" min="0" value={trailingForm.trailing_take_buffer_atr} onChange={(e) => setTrailingForm((v) => ({ ...v, trailing_take_buffer_atr: e.target.value }))} />
+                          </div>
+                        </>
+                      ) : (
+                        <>
+                          <div>
+                            <label className="field-label">激活盈利 %</label>
+                            <input className="form-input" type="number" step="0.1" min="0" value={trailingForm.trailing_activation_pct} onChange={(e) => setTrailingForm((v) => ({ ...v, trailing_activation_pct: e.target.value }))} />
+                          </div>
+                          <div>
+                            <label className="field-label">止损回落追踪 %</label>
+                            <input className="form-input" type="number" step="0.1" min="0" value={trailingForm.trailing_retrace_pct} onChange={(e) => setTrailingForm((v) => ({ ...v, trailing_retrace_pct: e.target.value }))} />
+                          </div>
+                          <div>
+                            <label className="field-label">止盈顺势跟随 %</label>
+                            <input className="form-input" type="number" step="0.1" min="0" value={trailingForm.trailing_take_retrace_pct} onChange={(e) => setTrailingForm((v) => ({ ...v, trailing_take_retrace_pct: e.target.value }))} />
+                          </div>
+                          <div>
+                            <label className="field-label">止盈锁仓缓冲 %</label>
+                            <input className="form-input" type="number" step="0.1" min="0" value={trailingForm.trailing_take_buffer_pct} onChange={(e) => setTrailingForm((v) => ({ ...v, trailing_take_buffer_pct: e.target.value }))} />
+                          </div>
+                        </>
+                      )}
+                    </div>
+                  )}
+                  <div className="row-actions" style={{ marginTop: 8 }}>
+                    <button className="mini-btn primary" onClick={handleSaveTrailing}><Save size={12} /> 保存持仓保护</button>
+                  </div>
+                  <p className="factor-desc" style={{ margin: "6px 0 0" }}>保存后立即生效，即使未开启实盘匹配也会继续管理已有 MT5 持仓的 SL/TP。</p>
+                </div>
+                <div className="tool-block">
+                  <h3><Shield size={13} /> 激活信号</h3>
+                  {(!scan || scan.candidates.length === 0) ? (
+                    <div className="empty">暂无激活信号，可先点击[立即扫描]。</div>
+                  ) : (
+                    <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+                      {scan.candidates.map((c) => (
+                        <div className="trade-row" key={c.factor_id}>
+                          <div><div className="t-label">{c.factor_name}</div><div className="t-value">{c.signal === "long" ? "多头" : c.signal === "short" ? "空头" : "无信号"}</div></div>
+                          <div><div className="t-label">置信度</div><div className="t-value">{(c.confidence * 100).toFixed(1)}%</div></div>
+                          <div className="badge active">{c.regime}</div>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
+                <div className="tool-block">
+                  <h3><Wallet size={13} /> 模拟盘任务</h3>
+                  {paperJobs.length === 0 ? (
+                    <div className="empty">暂无模拟盘任务。</div>
+                  ) : (
+                    <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+                      {paperJobs.map((j) => (
+                        <div className="trade-row" key={String(j.id)}>
+                          <div><div className="t-label">因子</div><div className="t-value">{String(j.factor_name)}</div></div>
+                          <div><div className="t-label">状态</div><div className="t-value">{j.status === "running" ? "运行中" : "已暂停"}</div></div>
+                          <div className={Number(j.equity) >= 10000 ? "pnl-pos" : "pnl-neg"}>{Number(j.equity).toFixed(2)}</div>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              </>
+            )}
+
+            {tab === "replay" && (
+              <div className="sub-tabs">
+                <button className={`sub-tab ${subTab === "replay" ? "active" : ""}`} onClick={() => setSubTab("replay")}>复盘报告</button>
+                <button className={`sub-tab ${subTab === "orders" ? "active" : ""}`} onClick={() => setSubTab("orders")}>订单日志</button>
+              </div>
+            )}
+            {tab === "replay" && subTab === "replay" && (
+              <>
+                <div className="tool-block">
+                  <h3><FileClock size={13} /> 交易记录（最高浮盈 / 最低浮亏）</h3>
+                  <div className="row-actions">
+                    <button className="mini-btn primary" disabled={backfilling} onClick={handleBackfillExtremes}>
+                      {backfilling ? "回填中..." : "回填历史最高/最低盈亏"}
+                    </button>
+                    <button className="mini-btn" onClick={loadTrades}><RefreshCw size={12} /> 刷新</button>
+                  </div>
+                  {tradeRecords.length === 0 ? (
+                    <div className="empty">暂无交易记录</div>
+                  ) : (
+                    <div style={{ display: "flex", flexDirection: "column", gap: 6, marginTop: 8 }}>
+                      {tradeRecords.slice(0, 50).map((t) => {
+                        const side = t.side === "long" || t.side === "buy" ? "多" : "空";
+                        const peak = Number(t.peak_pnl ?? NaN);
+                        const trough = Number(t.trough_pnl ?? NaN);
+                        return (
+                          <div className="trade-row" key={String(t.id)} style={{ flexWrap: "wrap" }}>
+                            <div>
+                              <div className="t-label">{t.symbol} {side} | {Number(t.lots).toFixed(2)} 手</div>
+                              <div className="t-value">
+                                入 {Number(t.entry_price).toFixed(5)} → 出 {t.exit_price ? Number(t.exit_price).toFixed(5) : "--"}
+                              </div>
+                            </div>
+                            <div>
+                              <div className="t-label">实际盈亏</div>
+                              <div className={`t-value ${Number(t.pnl) >= 0 ? "pnl-pos" : "pnl-neg"}`}>
+                                {Number(t.pnl).toFixed(2)} {t.exit_reason ? ` | ${t.exit_reason}` : ""}
+                              </div>
+                            </div>
+                            <div>
+                              <div className="t-label">最高浮盈</div>
+                              <div className="t-value pnl-pos">
+                                {Number.isFinite(peak) ? `${peak.toFixed(2)} @ ${Number(t.peak_price).toFixed(5)}` : "--"}
+                              </div>
+                            </div>
+                            <div>
+                              <div className="t-label">最低浮亏</div>
+                              <div className="t-value pnl-neg">
+                                {Number.isFinite(trough) ? `${trough.toFixed(2)} @ ${Number(t.trough_price).toFixed(5)}` : "--"}
+                              </div>
+                            </div>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  )}
+                </div>
+                <div className="tool-block">
+                  <h3><FileText size={13} /> AI 中文复盘</h3>
+                  <div className="row-actions">
+                    <button className="mini-btn primary" onClick={handleReplay}><FileText size={12} /> 导出中文复盘报告</button>
+                  </div>
+                  {replay && <p className="factor-desc">综合评分：{replay.score} / 100，因子：{replay.factor_name}</p>}
+                </div>
+                {replay && <pre className="replay-doc">{replay.markdown}</pre>}
+              </>
+            )}
+
+            {tab === "trading" && subTab === "mt5" && <Mt5Panel symbol={symbol} timeframe={timeframe} />}
+            {tab === "replay" && subTab === "orders" && <OrderLogPanel />}
+            {tab === "ai" && (
+              <>
+                <div className="tool-block">
+                  <h3><Cpu size={13} /> AI 连接状态</h3>
+                  <div className="metric-grid">
+                    <div className="metric"><div className="label">已配置 AI</div><div className="value">{aiStatus?.configs.length ?? 0}</div></div>
+                    <div className="metric"><div className="label">已启用</div><div className="value">{aiStatus?.enabled_count ?? 0}</div></div>
+                    <div className="metric"><div className="label">负责板块</div><div className="value">{Object.values(aiStatus?.roles ?? {}).filter((r) => r.configs.length).length} / 8</div></div>
+                  </div>
+                  <div className="row-actions">
+                    <button className="mini-btn primary" onClick={() => openAiDialog()}><Bot size={12} /> 新增 AI 配置</button>
+                    <button className="mini-btn" onClick={loadAiStatus}><RefreshCw size={12} /> 刷新状态</button>
+                  </div>
+                </div>
+                <div className="tool-block">
+                  <h3><Layers size={13} /> AI 配置列表</h3>
+                  {!aiStatus || aiStatus.configs.length === 0 ? (
+                    <div className="empty">尚未配置 AI，点击[新增 AI 配置]接入 qwen3.8-max 等模型。</div>
+                  ) : (
+                    <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+                      {aiStatus.configs.map((cfg) => (
+                        <div className="trade-row" key={cfg.id} style={{ flexWrap: "wrap" }}>
+                          <div>
+                            <div className="t-label">{cfg.name} <span className={`badge ${cfg.enabled ? "active" : ""}`}>{cfg.enabled ? "启用" : "停用"}</span></div>
+                            <div className="t-value">{cfg.provider} / {cfg.model} | Key {cfg.api_key_masked || "未设置"}</div>
+                          </div>
+                          <div>
+                            <div className="t-label">负责板块</div>
+                            <div className="t-value">{cfg.roles.map((r) => AI_ROLE_OPTIONS.find(([k]) => k === r)?.[1] ?? r).join("、") || "未指派"}</div>
+                          </div>
+                          <div className="row-actions">
+                            <button className="mini-btn" disabled={aiTestingId === cfg.id} onClick={() => handleAiTest(cfg.id)}>
+                              <Cable size={12} /> {aiTestingId === cfg.id ? "测试中..." : "测试连接"}
+                            </button>
+                            <button className="mini-btn" onClick={() => openAiDialog(cfg)}><Pencil size={12} /> 编辑</button>
+                            <button className="mini-btn danger" onClick={() => handleAiDelete(cfg)}><Trash2 size={12} /> 删除</button>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
+                <div className="tool-block">
+                  <h3><Layers size={13} /> 板块指派</h3>
+                  <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+                    {AI_ROLE_OPTIONS.map(([key, label]) => (
+                      <div className="trade-row" key={key}>
+                        <div><div className="t-label">{label}</div></div>
+                        <div className={`badge ${aiStatus?.roles[key]?.configs.length ? "active" : ""}`}>
+                          {aiStatus?.roles[key]?.configs.length ? aiStatus.roles[key].configs.join("、") : "未指派"}
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              </>
+            )}
+          </div>
+        </aside>
+      </div>
+
+      <div className="status-strip">
+        <Bell size={12} /> 最近告警：
+        {alerts.slice(0, 3).map((a) => (
+          <span key={a.id} style={{ color: a.level === "error" ? "var(--red)" : a.level === "warning" ? "var(--amber)" : "var(--muted)" }}>
+            [{a.title}] {a.message}
+          </span>
+        ))}
+        {alerts.length === 0 && <span>暂无告警</span>}
+      </div>
+
+      {toast && <div className={`toast ${toast.type}`}>{toast.type === "success" ? "✓ " : "✕ "}{toast.message}</div>}
+      {editingFactor && (
+        <FactorEditModal factor={editingFactor} onSave={handleUpdateFactor} onClose={() => setEditingFactor(null)} />
+      )}
+      {aiDialog && (
+        <div className="modal-overlay">
+          <div className="modal" style={{ width: 640 }}>
+            <h3>{aiEditingId ? "编辑 AI 配置" : "新增 AI 配置"}</h3>
+            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8 }}>
+              <div>
+                <label className="field-label">名称备注</label>
+                <input className="form-input" value={aiForm.name} onChange={(e) => setAiForm((v) => ({ ...v, name: e.target.value }))} placeholder="例如：主力-千问" />
+              </div>
+              <div>
+                <label className="field-label">接入方式</label>
+                <select className="form-input" value={aiForm.provider} onChange={(e) => setAiForm((v) => ({ ...v, provider: e.target.value }))}>
+                  <option value="openai">OpenAI 兼容（千问/OpenAI）</option>
+                  <option value="anthropic">Anthropic（Claude）</option>
+                </select>
+              </div>
+              <div>
+                <label className="field-label">模型名称</label>
+                <input className="form-input" value={aiForm.model} onChange={(e) => setAiForm((v) => ({ ...v, model: e.target.value }))} placeholder="qwen3.8-max" />
+              </div>
+              <div>
+                <label className="field-label">API Key</label>
+                <input className="form-input" type="password" value={aiForm.api_key} onChange={(e) => setAiForm((v) => ({ ...v, api_key: e.target.value }))} placeholder={aiEditingId ? "留空则不修改" : "sk-..."} />
+              </div>
+              <div style={{ gridColumn: "1 / -1" }}>
+                <label className="field-label">接口地址（OpenAI 兼容）</label>
+                <input className="form-input" value={aiForm.base_url} onChange={(e) => setAiForm((v) => ({ ...v, base_url: e.target.value }))} placeholder="https://dashscope.aliyuncs.com/compatible-mode/v1" />
+              </div>
+              <div style={{ gridColumn: "1 / -1" }}>
+                <label className="field-label">负责板块</label>
+                <div style={{ display: "flex", flexWrap: "wrap", gap: 8 }}>
+                  {AI_ROLE_OPTIONS.map(([key, label]) => (
+                    <label key={key} style={{ display: "flex", alignItems: "center", gap: 5, fontSize: 12 }}>
+                      <input
+                        type="checkbox"
+                        checked={aiForm.roles.includes(key)}
+                        onChange={(e) => setAiForm((v) => ({
+                          ...v,
+                          roles: e.target.checked ? [...v.roles, key] : v.roles.filter((r) => r !== key),
+                        }))}
+                      />
+                      {label}
+                    </label>
+                  ))}
+                </div>
+              </div>
+              <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                <label className="field-label" style={{ margin: 0 }}>启用</label>
+                <input type="checkbox" checked={aiForm.enabled} onChange={(e) => setAiForm((v) => ({ ...v, enabled: e.target.checked }))} />
+              </div>
+            </div>
+            <div className="row-actions" style={{ marginTop: 10 }}>
+              <button className="mini-btn primary" disabled={busy} onClick={handleAiSave}>{busy ? "保存中..." : "保存"}</button>
+              <button className="mini-btn" onClick={() => setAiDialog(false)}>取消</button>
+            </div>
+          </div>
+        </div>
+      )}
+      {matcherDialog && (
+        <div className="modal-overlay">
+          <div className="modal" style={{ width: 720 }}>
+            <h3>启动实盘匹配</h3>
+            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8 }}>
+              <div>
+                <label className="field-label">交易品种</label>
+                <SymbolSearchSelect symbols={symbols} value={matcherForm.symbol} onChange={(s) => setMatcherForm((v) => ({ ...v, symbol: s }))} />
+              </div>
+              <div>
+                <label className="field-label">K线周期</label>
+                <select className="form-input" value={matcherForm.timeframe} onChange={(e) => setMatcherForm((v) => ({ ...v, timeframe: e.target.value }))}>
+                  {TIMEFRAMES.map((t) => <option key={t} value={t}>{t}</option>)}
+                </select>
+              </div>
+              <div>
+                <label className="field-label">最小信号置信度</label>
+                <input className="form-input" type="number" step="0.01" value={matcherForm.min_confidence} onChange={(e) => setMatcherForm((v) => ({ ...v, min_confidence: e.target.value }))} />
+              </div>
+              <div>
+                <label className="field-label">交易方向</label>
+                <select className="form-input" value={matcherForm.direction} onChange={(e) => setMatcherForm((v) => ({ ...v, direction: e.target.value }))}>
+                  <option value="both">双向</option>
+                  <option value="long">只做多</option>
+                  <option value="short">只做空</option>
+                </select>
+              </div>
+              <div>
+                <label className="field-label">仓位模式</label>
+                <select className="form-input" value={matcherForm.lot_mode} onChange={(e) => setMatcherForm((v) => ({ ...v, lot_mode: e.target.value }))}>
+                  <option value="risk">按风险比例</option>
+                  <option value="fixed">固定手数</option>
+                </select>
+              </div>
+              {matcherForm.lot_mode === "risk" ? (
+                <div>
+                  <label className="field-label">单笔风险 %</label>
+                  <input className="form-input" type="number" step="0.1" value={matcherForm.risk_percent} onChange={(e) => setMatcherForm((v) => ({ ...v, risk_percent: e.target.value }))} />
+                </div>
+              ) : (
+                <div>
+                  <label className="field-label">固定手数</label>
+                  <input className="form-input" type="number" step="0.01" value={matcherForm.fixed_lots} onChange={(e) => setMatcherForm((v) => ({ ...v, fixed_lots: e.target.value }))} />
+                </div>
+              )}
+              <div>
+                <label className="field-label">最大持仓数量</label>
+                <input className="form-input" type="number" min="1" value={matcherForm.max_positions} onChange={(e) => setMatcherForm((v) => ({ ...v, max_positions: e.target.value }))} />
+              </div>
+              <div>
+                <label className="field-label">初始止损止盈来源</label>
+                <select className="form-input" value={matcherForm.initial_sltp_source} onChange={(e) => setMatcherForm((v) => ({ ...v, initial_sltp_source: e.target.value }))}>
+                  <option value="pattern">形态案例推荐</option>
+                  <option value="manual">手动配置（ATR/点数/支撑压力）</option>
+                </select>
+              </div>
+
+              <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                <label className="field-label" style={{ margin: 0 }}>移动止损/止盈</label>
+                <input type="checkbox" checked={matcherForm.trailing_enabled} onChange={(e) => setMatcherForm((v) => ({ ...v, trailing_enabled: e.target.checked }))} />
+              </div>
+              {matcherForm.trailing_enabled && (
+                <>
+                  <div style={{ gridColumn: "1 / -1", display: "flex", flexDirection: "column", gap: 6 }}>
+                    <label className="field-label" style={{ margin: 0 }}>止损止盈策略（可多选）</label>
+                    <div style={{ display: "flex", gap: 12 }}>
+                      <label style={{ display: "flex", alignItems: "center", gap: 5, fontSize: 12 }}>
+                        <input type="checkbox" checked={matcherForm.sl_tp_strategies.includes("high_watermark")} onChange={(e) => setMatcherForm((v) => ({ ...v, sl_tp_strategies: e.target.checked ? [...v.sl_tp_strategies, "high_watermark"] : v.sl_tp_strategies.filter((s) => s !== "high_watermark") }))} />
+                        最高浮盈回落
+                      </label>
+                      <label style={{ display: "flex", alignItems: "center", gap: 5, fontSize: 12 }}>
+                        <input type="checkbox" checked={matcherForm.sl_tp_strategies.includes("partial_close")} onChange={(e) => setMatcherForm((v) => ({ ...v, sl_tp_strategies: e.target.checked ? [...v.sl_tp_strategies, "partial_close"] : v.sl_tp_strategies.filter((s) => s !== "partial_close") }))} />
+                        分批落袋 + 移动保平
+                      </label>
+                    </div>
+                  </div>
+                  {matcherForm.sl_tp_strategies.includes("high_watermark") && (
+                    <div style={{ gridColumn: "1 / -1", display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8 }}>
+                      <div>
+                        <label className="field-label">回落激活浮盈 $/手</label>
+                        <input className="form-input" type="number" min="0" value={matcherForm.hw_activation_profit} onChange={(e) => setMatcherForm((v) => ({ ...v, hw_activation_profit: e.target.value }))} />
+                      </div>
+                      <div>
+                        <label className="field-label">高位回落比例 %</label>
+                        <input className="form-input" type="number" min="0" value={matcherForm.hw_max_retrace_pct} onChange={(e) => setMatcherForm((v) => ({ ...v, hw_max_retrace_pct: e.target.value }))} />
+                      </div>
+                    </div>
+                  )}
+                  {matcherForm.sl_tp_strategies.includes("partial_close") && (
+                    <div style={{ gridColumn: "1 / -1", display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8 }}>
+                      <div>
+                        <label className="field-label">第一档落袋浮盈 $/手</label>
+                        <input className="form-input" type="number" min="0" value={matcherForm.pc_tier1_profit} onChange={(e) => setMatcherForm((v) => ({ ...v, pc_tier1_profit: e.target.value }))} />
+                      </div>
+                      <div>
+                        <label className="field-label">第一档平仓比例 %</label>
+                        <input className="form-input" type="number" min="0" max="100" value={matcherForm.pc_tier1_close_pct} onChange={(e) => setMatcherForm((v) => ({ ...v, pc_tier1_close_pct: e.target.value }))} />
+                      </div>
+                      <div>
+                        <label className="field-label">第二档落袋浮盈 $/手</label>
+                        <input className="form-input" type="number" min="0" value={matcherForm.pc_tier2_profit} onChange={(e) => setMatcherForm((v) => ({ ...v, pc_tier2_profit: e.target.value }))} />
+                      </div>
+                      <div>
+                        <label className="field-label">第二档平仓比例 %</label>
+                        <input className="form-input" type="number" min="0" max="100" value={matcherForm.pc_tier2_close_pct} onChange={(e) => setMatcherForm((v) => ({ ...v, pc_tier2_close_pct: e.target.value }))} />
+                      </div>
+                      <div>
+                        <label className="field-label">保本缓冲 $</label>
+                        <input className="form-input" type="number" step="0.1" min="0" value={matcherForm.pc_breakeven_buffer} onChange={(e) => setMatcherForm((v) => ({ ...v, pc_breakeven_buffer: e.target.value }))} />
+                      </div>
+                    </div>
+                  )}
+                  <div style={{ gridColumn: "1 / -1" }}>
+                    <label className="field-label">距离单位</label>
+                    <select className="form-input" value={matcherForm.trailing_unit} onChange={(e) => setMatcherForm((v) => ({ ...v, trailing_unit: e.target.value }))}>
+                      <option value="atr">ATR（推荐黄金）</option>
+                      <option value="pct">百分比</option>
+                    </select>
+                  </div>
+                  {matcherForm.trailing_unit === "atr" ? (
+                    <>
+                      <div>
+                        <label className="field-label">激活盈利（ATR）</label>
+                        <input className="form-input" type="number" step="0.1" min="0" value={matcherForm.trailing_activation_atr} onChange={(e) => setMatcherForm((v) => ({ ...v, trailing_activation_atr: e.target.value }))} />
+                      </div>
+                      <div>
+                        <label className="field-label">止损追踪（ATR）</label>
+                        <input className="form-input" type="number" step="0.1" min="0" value={matcherForm.trailing_stop_atr} onChange={(e) => setMatcherForm((v) => ({ ...v, trailing_stop_atr: e.target.value }))} />
+                      </div>
+                      <div>
+                        <label className="field-label">止盈顺势（ATR）</label>
+                        <input className="form-input" type="number" step="0.1" min="0" value={matcherForm.trailing_take_atr} onChange={(e) => setMatcherForm((v) => ({ ...v, trailing_take_atr: e.target.value }))} />
+                      </div>
+                      <div>
+                        <label className="field-label">止盈锁仓缓冲（ATR）</label>
+                        <input className="form-input" type="number" step="0.1" min="0" value={matcherForm.trailing_take_buffer_atr} onChange={(e) => setMatcherForm((v) => ({ ...v, trailing_take_buffer_atr: e.target.value }))} />
+                      </div>
+                    </>
+                  ) : (
+                    <>
+                      <div>
+                        <label className="field-label">激活盈利 %</label>
+                        <input className="form-input" type="number" step="0.1" min="0" value={matcherForm.trailing_activation_pct} onChange={(e) => setMatcherForm((v) => ({ ...v, trailing_activation_pct: e.target.value }))} />
+                      </div>
+                      <div>
+                        <label className="field-label">止损回落追踪 %</label>
+                        <input className="form-input" type="number" step="0.1" min="0" value={matcherForm.trailing_retrace_pct} onChange={(e) => setMatcherForm((v) => ({ ...v, trailing_retrace_pct: e.target.value }))} />
+                      </div>
+                      <div>
+                        <label className="field-label">止盈顺势跟随 %</label>
+                        <input className="form-input" type="number" step="0.1" min="0" value={matcherForm.trailing_take_retrace_pct} onChange={(e) => setMatcherForm((v) => ({ ...v, trailing_take_retrace_pct: e.target.value }))} />
+                      </div>
+                      <div>
+                        <label className="field-label">止盈锁仓缓冲 %</label>
+                        <input className="form-input" type="number" step="0.1" min="0" value={matcherForm.trailing_take_buffer_pct} onChange={(e) => setMatcherForm((v) => ({ ...v, trailing_take_buffer_pct: e.target.value }))} />
+                      </div>
+                    </>
+                  )}
+                </>
+              )}
+              <div>
+                <label className="field-label">下单延迟（毫秒）</label>
+                <input className="form-input" type="number" min="0" value={matcherForm.delay_ms} onChange={(e) => setMatcherForm((v) => ({ ...v, delay_ms: e.target.value }))} />
+              </div>
+              <div>
+                <label className="field-label">最大日亏损 %</label>
+                <input className="form-input" type="number" step="0.1" value={matcherForm.max_daily_loss_pct} onChange={(e) => setMatcherForm((v) => ({ ...v, max_daily_loss_pct: e.target.value }))} />
+              </div>
+              <div>
+                <label className="field-label">最大回撤 %</label>
+                <input className="form-input" type="number" step="0.1" value={matcherForm.max_drawdown_pct} onChange={(e) => setMatcherForm((v) => ({ ...v, max_drawdown_pct: e.target.value }))} />
+              </div>
+              <div>
+                <label className="field-label">形态相似度门槛（0-1）</label>
+                <input className="form-input" type="number" min="0" max="1" step="0.01" value={matcherForm.pattern_min_similarity} onChange={(e) => setMatcherForm((v) => ({ ...v, pattern_min_similarity: e.target.value }))} />
+              </div>
+              <div>
+                <label className="field-label">最小形态样本数</label>
+                <input className="form-input" type="number" min="0" value={matcherForm.pattern_min_samples} onChange={(e) => setMatcherForm((v) => ({ ...v, pattern_min_samples: e.target.value }))} />
+              </div>
+              <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                <label className="field-label" style={{ margin: 0 }}>自动平仓</label>
+                <input type="checkbox" checked={matcherForm.auto_close_enabled} onChange={(e) => setMatcherForm((v) => ({ ...v, auto_close_enabled: e.target.checked }))} />
+              </div>
+              <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                <label className="field-label" style={{ margin: 0 }}>推送告警</label>
+                <input type="checkbox" checked={matcherForm.alert_enabled} onChange={(e) => setMatcherForm((v) => ({ ...v, alert_enabled: e.target.checked }))} />
+              </div>
+            </div>
+            <div className="row-actions" style={{ marginTop: 10 }}>
+              <button className="mini-btn primary" onClick={handleMatcherStart}>确认启动</button>
+              <button className="mini-btn" onClick={() => setMatcherDialog(false)}>取消</button>
+            </div>
+          </div>
+        </div>
+      )}
+      {pendingExit && (
+        <div className="modal-overlay">
+          <div className="modal" style={{ width: 480 }}>
+            <h3>选择出场原因</h3>
+            <p className="factor-desc">出场价格：{pendingExit.price.toFixed(5)}</p>
+            <div className="row-actions" style={{ flexWrap: "wrap", gap: 6 }}>
+              {["到压力位", "破支撑", "止盈", "止损", "超时", "手动"].map((reason) => (
+                <button key={reason} className="mini-btn" onClick={() => confirmExitReason(reason)}>{reason}</button>
+              ))}
+            </div>
+            <div className="row-actions" style={{ marginTop: 8 }}>
+              <button className="mini-btn" onClick={() => setPendingExit(null)}>取消</button>
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
