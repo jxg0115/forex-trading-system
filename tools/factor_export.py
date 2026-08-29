@@ -62,16 +62,31 @@ def backup_db(keep: int = 14) -> Path:
             dst.close()
     finally:
         src.close()
-    # 保留策略：只保留最近 keep 份
+    # 保留策略：按日去重——同日只留最新一份，跨日保留最近 keep 个不同日期（真窗口）
+    removed = clean_old_backups(keep)
+    if removed:
+        print(f"清理重复/超窗备份 {removed} 份（按日去重保留最近 {keep} 个日期）")
+    return dst_path
+
+
+def clean_old_backups(keep: int = 14) -> int:
+    """按日去重清理：同日只留最新，跨日保留最近 keep 个不同日期。返回删除数。"""
     olds = sorted(BACKUP_DIR.glob("factor_store_*.db"))
-    if len(olds) > keep:
-        for f in olds[:-keep]:
+    latest_by_day: dict[str, Path] = {}
+    for f in olds:
+        parts = f.name.split("_")
+        if len(parts) >= 4:
+            latest_by_day[parts[2]] = f  # YYYYMMDD -> 同日最新（sorted 升序，后写覆盖）
+    keep_paths = {latest_by_day[d] for d in sorted(latest_by_day)[-keep:]}
+    removed = 0
+    for f in olds:
+        if f not in keep_paths:
             try:
                 f.unlink()
-                print(f"清理旧备份 -> {f.name}")
+                removed += 1
             except OSError:
                 pass
-    return dst_path
+    return removed
 
 
 def export_json() -> Path:
