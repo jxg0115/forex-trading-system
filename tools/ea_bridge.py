@@ -94,12 +94,23 @@ def read_config() -> dict:
 
 
 def append_cmd(seq: int, cmd: str, *args) -> None:
-    with open(CMDS_FILE, "a", newline="") as f:
-        w = csv.writer(f)
-        vals = []
-        for a in args:
-            vals.append(round(float(a), 5) if isinstance(a, (int, float)) else a)
-        w.writerow([seq, cmd] + vals)
+    # 容错：EA 在测试重启（OnInit）会清空 cmds.csv（FileOpen FILE_WRITE 持锁），
+    # 与桥的 append 可能冲突（Windows 文件锁 PermissionError）——重试几次，仍失败则跳过
+    #（下轮循环再试），绝不让桥崩溃。
+    vals = []
+    for a in args:
+        vals.append(round(float(a), 5) if isinstance(a, (int, float)) else a)
+    line_vals = [seq, cmd] + vals
+    for _ in range(5):
+        try:
+            with open(CMDS_FILE, "a", newline="") as f:
+                csv.writer(f).writerow(line_vals)
+            return
+        except PermissionError:
+            time.sleep(0.3)
+        except Exception:
+            return
+    print(f"[ea_bridge] append_cmd 写入失败(锁冲突) seq={seq} cmd={cmd}——下轮重试")
 
 
 def read_trades() -> list[dict]:
@@ -194,6 +205,26 @@ def main() -> None:
     seq = 0
     open_info: dict | None = None
     trades_known = 0
+
+    # 重启恢复：若已有持仓（trades 有 in 未配对），重建 open_info（近似：extreme/时间停从当前起，
+    # sl 下轮 holding 会自动重算并发 MODIFY 接管）——重启不丢持仓。
+    rows0 = read_trades()
+    n_open0 = max(0,
+                  sum(1 for r in rows0 if r["kind"] == "in")
+                  - sum(1 for r in rows0 if r["kind"] == "out"))
+    if n_open0 > 0:
+        df0 = read_bars()
+        last_in = [r for r in rows0 if r["kind"] == "in"][-1]
+        open_info = {
+            "idx": max(0, len(df0) - 1),
+            "entry": last_in["price"],
+            "dir": 1 if last_in["dir"] == 0 else -1,
+            "sl": 0.0, "tp": 0.0,
+            "extreme": last_in["price"],
+            "sl_sent": 0.0, "wait_in": False,
+        }
+        print(f"[ea_bridge] 重启恢复持仓 entry={last_in['price']:.3f} dir={'LONG' if open_info['dir'] > 0 else 'SHORT'} "
+              f"bar#{open_info['idx']}（移动止损/时间停自动接管）")
 
     while True:
         df = read_bars()
