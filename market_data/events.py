@@ -138,3 +138,22 @@ def next_event(after: datetime | None = None) -> dict[str, Any] | None:
     after = after or datetime.now(timezone.utc)
     events = get_events(date_from=after)
     return events[0] if events else None
+
+
+def is_high_event_window(
+    now: datetime | None = None,
+    window_minutes: int = 30,
+) -> tuple[bool, dict[str, Any] | None]:
+    """当前时间是否落在高影响事件窗口内（±window_minutes 分钟）。
+
+    用于决策链 D3 事件过滤：事件窗口内禁开仓（NFP/FOMC/利率决议等）。
+    """
+    now = now or datetime.now(timezone.utc)
+    window_sec = max(int(window_minutes), 0) * 60
+    for e in get_events():
+        if e.get("importance") != "high":
+            continue
+        dt = _parse_dt(e["dt"])
+        if abs((dt - now).total_seconds()) <= window_sec:
+            return True, e
+    return False, None

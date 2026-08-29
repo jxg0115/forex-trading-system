@@ -43,6 +43,7 @@ class Settings:
 
     telegram_bot_token: str = _env("TELEGRAM_BOT_TOKEN")
     telegram_chat_id: str = _env("TELEGRAM_CHAT_ID")
+    webhook_token: str = _env("WEBHOOK_TOKEN")   # 外部信号 webhook 鉴权 token（空 = 测试环境不鉴权）
     wechat_webhook: str = _env("WECHAT_WEBHOOK")
     dingtalk_webhook: str = _env("DINGTALK_WEBHOOK")
     feishu_webhook: str = _env("FEISHU_WEBHOOK")
