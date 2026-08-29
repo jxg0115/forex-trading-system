@@ -649,6 +649,13 @@ export const api = {
   sltpTrain(): Promise<{ trained: number; model_version: string; trained_at: string }> {
     return request("/api/sltp/train", { method: "POST" });
   },
+  modelPredict(name: string, symbol: string, timeframe: string, count = 200): Promise<{ model: string; trained: boolean; signal: string; confidence: number; probability?: number }> {
+    return request(`/api/models/${name}/predict`, {
+      method: "POST",
+      headers: JSON_HEADERS,
+      body: JSON.stringify({ symbol, timeframe, count }),
+    });
+  },
   sltpModel(): Promise<{ model_version: string; trained_at: string; strategy_count: number; avg_confidence: number }> {
     return request("/api/sltp/model");
   },

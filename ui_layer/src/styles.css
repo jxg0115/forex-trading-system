@@ -968,6 +968,47 @@ input:focus {
   white-space: nowrap;
 }
 
+.legend-item.model-signal {
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  padding: 1px 6px;
+}
+
+.legend-item.model-signal.long {
+  border-left: 3px solid var(--green);
+  color: var(--green);
+}
+
+.legend-item.model-signal.short {
+  border-left: 3px solid var(--red);
+  color: var(--red);
+}
+
+.legend-item.model-signal em {
+  font-style: normal;
+  opacity: 0.8;
+  margin-left: 4px;
+}
+
+@media (max-width: 720px) {
+  .chart-wrap {
+    min-height: 320px;
+  }
+
+  .sidebar {
+    width: 100%;
+    flex-basis: auto;
+  }
+
+  .app-shell {
+    flex-direction: column;
+  }
+
+  .main-section {
+    padding: 8px;
+  }
+}
+
 @media (max-width: 1280px) {
   .sidebar {
     width: 360px;

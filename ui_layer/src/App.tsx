@@ -32,7 +32,7 @@ import {
   Wand2,
   X,
 } from "lucide-react";
-import { KLineChart, type ChartMode } from "./components/KLineChart";
+import { KLineChart, type ChartMode, type ModelSignal } from "./components/KLineChart";
 import { FactorEditModal } from "./components/FactorEditModal";
 import { Mt5Panel } from "./components/Mt5Panel";
 import { OrderLogPanel } from "./components/OrderLogPanel";
@@ -175,6 +175,7 @@ export default function App() {
   const prevTickRef = useRef<number | null>(null);
   const [timeframe, setTimeframe] = useState("M15");
   const [bars, setBars] = useState<Bar[]>([]);
+  const [modelSignal, setModelSignal] = useState<ModelSignal | null>(null);
   const [snapshot, setSnapshot] = useState<{ current_price: number; change_pct_24h: number; atr: number; atr_pct: number } | null>(null);
   const [indicators, setIndicators] = useState<IndicatorData | null>(null);
   const [showIndicators, setShowIndicators] = useState(true);
@@ -1967,6 +1968,24 @@ export default function App() {
   }, [symbol, timeframe]);
 
   useEffect(() => {
+    let cancelled = false;
+    const refresh = async () => {
+      try {
+        const r = await api.modelPredict("logistic_momentum", symbol, timeframe);
+        if (!cancelled) setModelSignal(r.trained && r.signal !== "none" ? { model: r.model ?? "logistic_momentum", signal: r.signal, confidence: r.confidence, probability: r.probability } : null);
+      } catch {
+        if (!cancelled) setModelSignal(null);
+      }
+    };
+    refresh();
+    const timer = window.setInterval(refresh, 15000);
+    return () => {
+      cancelled = true;
+      window.clearInterval(timer);
+    };
+  }, [symbol, timeframe]);
+
+  useEffect(() => {
     const timer = window.setInterval(() => {
       loadBars();
       loadSnapshot();
@@ -2131,6 +2150,7 @@ export default function App() {
             onPoint={handleAddPoint}
             onLevel={handleAddLevel}
             onMode={setMode}
+            modelSignal={modelSignal}
           />
         </section>
 

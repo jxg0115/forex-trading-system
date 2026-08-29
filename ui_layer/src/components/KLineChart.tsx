@@ -7,9 +7,11 @@ import {
   LineStyle,
   LineSeries,
   createChart,
+  createSeriesMarkers,
   type HistogramData,
   type IChartApi,
   type ISeriesApi,
+  type ISeriesMarkersPluginApi,
   type SeriesMarker,
   type Time,
   type UTCTimestamp,
@@ -25,6 +27,13 @@ interface RegionStats {
   volatility: string;
 }
 
+export interface ModelSignal {
+  model: string;
+  signal: string;
+  confidence: number;
+  probability?: number;
+}
+
 interface Props {
   bars: Bar[];
   selection: Selection | null;
@@ -36,6 +45,7 @@ interface Props {
   regionStats: RegionStats | null;
   indicators: IndicatorData | null;
   showIndicators: boolean;
+  modelSignal?: ModelSignal | null;
   onSelection: (selection: Selection | null) => void;
   onPoint: (point: MarkerPoint) => void;
   onLevel: (type: "support" | "resistance", price: number) => void;
@@ -57,6 +67,7 @@ export function KLineChart({
   regionStats,
   indicators,
   showIndicators,
+  modelSignal,
   onSelection,
   onPoint,
   onLevel,
@@ -66,6 +77,7 @@ export function KLineChart({
   const chartRef = useRef<IChartApi | null>(null);
   const candleRef = useRef<ISeriesApi<"Candlestick"> | null>(null);
   const volumeRef = useRef<ISeriesApi<"Histogram"> | null>(null);
+  const markersPluginRef = useRef<ISeriesMarkersPluginApi<Time> | null>(null);
   const dragStart = useRef<{ x: number; y: number } | null>(null);
   const previewRef = useRef<{ x1: number; y1: number; x2: number; y2: number } | null>(null);
   const selectionRef = useRef(selection);
@@ -183,6 +195,7 @@ export function KLineChart({
     chartRef.current = chart;
     candleRef.current = candle;
     volumeRef.current = volume;
+    markersPluginRef.current = createSeriesMarkers(candle);
 
     chart.timeScale().subscribeVisibleLogicalRangeChange(() => {
       drawSelection();
@@ -339,6 +352,26 @@ export function KLineChart({
     drawSelection();
   }, [selection, drawSelection]);
 
+  useEffect(() => {
+    const plugin = markersPluginRef.current;
+    if (!plugin) return;
+    if (!modelSignal || modelSignal.signal === "none" || !bars.length) {
+      plugin.setMarkers([]);
+      return;
+    }
+    const last = bars[bars.length - 1];
+    const long = modelSignal.signal === "long";
+    plugin.setMarkers([
+      {
+        time: toChartTime(last.time),
+        position: long ? "belowBar" : "aboveBar",
+        color: long ? "#2ecc9a" : "#ef6262",
+        shape: long ? "arrowUp" : "arrowDown",
+        text: `${modelSignal.model} ${long ? "做多" : "做空"} ${(modelSignal.confidence * 100).toFixed(0)}%`,
+      },
+    ]);
+  }, [modelSignal, bars]);
+
   const pointAt = useCallback((x: number, y: number) => {
     const chart = chartRef.current;
     const candle = candleRef.current;
@@ -475,6 +508,12 @@ export function KLineChart({
         {exitPoints.length > 0 && <span className="legend-item">出场点 <strong>{exitPoints.length}</strong></span>}
         {supportLevels.length > 0 && <span className="legend-item">支撑位 <strong>{supportLevels.length}</strong></span>}
         {resistanceLevels.length > 0 && <span className="legend-item">压力位 <strong>{resistanceLevels.length}</strong></span>}
+        {modelSignal && modelSignal.signal !== "none" && (
+          <span className={`legend-item model-signal ${modelSignal.signal}`}>
+            模型信号：<strong>{modelSignal.model} · {modelSignal.signal === "long" ? "做多" : "做空"}</strong>
+            <em>{(modelSignal.confidence * 100).toFixed(0)}%</em>
+          </span>
+        )}
       </div>
       {showIndicators && indicators && (
         <div className="indicator-legend">
