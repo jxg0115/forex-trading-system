@@ -120,6 +120,7 @@ class MiningJob:
         gateway: Any = None,
         max_candidates: int = 2000,
         include_structures: bool = True,
+        template_keys: list[str] | None = None,  # 非空=定向挖指定模板族
         sltp_policy: dict[str, Any] | None = None,
         executor: Any = None,
         date_from: Any = None,
@@ -134,6 +135,7 @@ class MiningJob:
         self.gateway = gateway
         self.max_candidates = int(max_candidates)
         self.include_structures = include_structures
+        self.template_keys = template_keys
         self.sltp_policy = sltp_policy or SltpPolicyConfig().to_dict()
         # 执行器可注入：生产默认 execute_factor（沙盒隔离）；测试/特殊环境可传同进程执行器
         self.executor = executor or execute_factor
@@ -195,12 +197,16 @@ class MiningJob:
                 return self.status
             # 样本外切分：前段评估（IC/命中率/行情分组），后段（≥30%，最多 500 根）做样本外回测
             total_n = len(df)
-            bt_n = min(max(int(total_n * 0.3), 100), 500)
+            bt_n = min(max(int(total_n * 0.3), 100), 3000)  # 样本外 ≥3000 根（约半年）：阶段一/条件因子两次短窗误判教训
             split = total_n - bt_n
             eval_df = df.iloc[:split]
             bt_df = df.iloc[split:]
 
-            candidates = generate_candidates(max_candidates=self.max_candidates, include_structures=self.include_structures)
+            candidates = generate_candidates(
+                max_candidates=self.max_candidates,
+                include_structures=self.include_structures,
+                template_keys=self.template_keys,
+            )
             total = len(candidates)
             self.progress.update({"total": total, "message": f"评估 {total} 个候选…"})
 
