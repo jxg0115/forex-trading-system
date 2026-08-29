@@ -1,20 +1,19 @@
 # -*- coding: utf-8 -*-
-"""系统端桥服务（EA 桥测试）：决策+统计全在系统，EA 只做转发/机械执行/成交回报。
+"""系统端桥服务（EA 桥测试）——Tester 决策调度器（v2：调系统各模块，整体功能参与）。
 
 职责：
-  1. 读 EA 转发的测试上下文（bridge_config.csv：品种/周期/入金/杠杆/起始时间）与
-     bar 流（bars.csv）；
-  2. 决策（全部在系统）：
-     - 信号：candidate_entry（swing100 + 趋势段门控 + 延迟3，与 rolling_recheck 同一序列）；
-     - 开仓：信号非 0 且无持仓 -> 发 OPEN（dir / sl / tp / vol 全由系统给定）；
-     - 止损止盈价位：2×ATR（1R）止损、6×ATR（3R）止盈（与引擎 sltp 同口径）；
-     - 移动止损（默认开启）：盈利达 1R 激活，回撤 1.5ATR 提损（与引擎 hw 语义一致）；
-     - 时间停：持仓 120 bar -> CLOSE；
+  1. 读 EA 转发的测试上下文（bridge_config.csv）与 bar 流（bars.csv）；
+  2. 决策（全部在系统，逐模块调用系统功能）：
+     - 因子匹配：候选 swing（candidate_entry，与 rolling_recheck 同序列）+
+       系统因子库 active 因子（/api/factors，exec 因子 code 真实执行）——多因子融合；
+     - 事件过滤：/api/events 近事件窗口内不开仓；
+     - SLTP：读触发因子的 sl_tp_strategy（stop_atr_mult / take_atr_mult / max_hold_bars）；
+     - 智能止损（移动止损）：读因子 trailing 参数（activation_atr / stop_atr），默认 1R/1.5ATR；
+     - 风控：仓位 = 1% 风险 / (止损距离占价比例)（balance 来自 Tester 注入）；
+     - 时间停：因子 max_hold_bars（默认 120 根）；
      - 写指令 cmds.csv（EA 机械执行）。
-  3. 统计：读 EA 成交回报 trades.csv（in/out，含引擎触发的 SL/TP 平仓）-> 配对算盈亏
-     （价格%：与仓位无关，胜率/PF/最大亏损/最高盈利/累计收益）
-     -> 输出统计表（UTF-8 stats.txt）与收益曲线（equity.csv，每笔平仓累计）。
-订单不保存到系统数据库：成交只进系统内存统计 + 输出文件，明细看 MT5 Tester 报告。
+  3. 统计：in/out 配对（含引擎 SL/TP 平仓）-> 价格%盈亏 -> stats.txt / equity.csv。
+订单不保存到系统数据库：明细看 MT5 Tester 报告。
 
 用法：主线 python tools/ea_bridge.py（后台常驻）；MT5 Tester 跑 DSH_Bridge_EA。
 """
@@ -22,9 +21,11 @@
 from __future__ import annotations
 
 import csv
+import json
 import os
 import sys
 import time
+import urllib.request
 
 import pandas as pd
 
@@ -45,13 +46,16 @@ EQUITY_FILE = os.path.join(BRIDGE_DIR, "equity.csv")
 POLL_S = 0.5
 
 ATR_PERIOD = 14
-SL_ATR_MULT = 2.0          # 止损 = 2×ATR（1R）
-TP_R_MULT = 3.0            # 止盈 = 3R = 6×ATR
-TIME_STOP_BARS = 120       # 时间停
-HW_ACTIVATION_R = 1.0      # 移动止损激活：盈利 >= 1R
-HW_RETRACE_ATR = 1.5       # 移动止损回撤：1.5×ATR
-VOL_FIXED = 0.01           # 仓位固定（统计用价格%，与仓位无关；明细看 MT5 报告）
+SL_ATR_MULT = 2.0          # 默认止损 = 2×ATR（1R）
+TP_R_MULT = 3.0            # 默认止盈 = 3R = 6×ATR
+TIME_STOP_BARS = 120       # 默认时间停
+HW_ACTIVATION_R = 1.0      # 默认移动止损激活：盈利 >= 1R（=2×ATR）
+HW_RETRACE_ATR = 1.5       # 默认移动止损回撤：1.5×ATR
+VOL_FIXED = 0.01           # 风控失败时的回退仓位
 MIN_BARS = 110             # swing 100 + 延迟3 预热
+
+_API = "http://127.0.0.1:8000"
+_FACTOR_CACHE = {"t": 0.0, "items": []}
 
 
 def _atr(df: pd.DataFrame, period: int) -> pd.Series:
@@ -80,6 +84,137 @@ def read_bars() -> pd.DataFrame:
     return df.dropna(subset=["open", "high", "low", "close"])
 
 
+# ================= Tester 决策调度器：调系统模块 =================
+
+def _api_get(path: str, timeout: int = 10):
+    try:
+        with urllib.request.urlopen(_API + path, timeout=timeout) as r:
+            return json.loads(r.read().decode("utf-8"))
+    except Exception:
+        return None
+
+
+def load_factors() -> list[dict]:
+    """读系统因子库（/api/factors）active 因子（含 code/sl_tp_strategy），120s 缓存。"""
+    now = time.time()
+    if now - _FACTOR_CACHE["t"] > 120:
+        data = _api_get("/api/factors")
+        items = []
+        if isinstance(data, dict):
+            raw = data.get("items") or data.get("factors") or []
+            if isinstance(raw, list):
+                for f in raw:
+                    if isinstance(f, dict) and f.get("status") == "active" and f.get("code"):
+                        items.append(f)
+        if items:
+            _FACTOR_CACHE.update({"t": now, "items": items})
+    return _FACTOR_CACHE["items"]
+
+
+def run_factor(df: pd.DataFrame, factor: dict):
+    """执行因子 code 的 calculate(df, params)，返回归一化 entry 序列（无则 None）。"""
+    try:
+        ns = {"pd": pd, "np": __import__("numpy")}
+        exec(factor["code"], ns)
+        calc = ns.get("calculate")
+        if not calc:
+            return None
+        dfv = df.copy()
+        if "volume" not in dfv.columns:
+            dfv["volume"] = 1.0  # Tester 无成交量——volume 因子退化为纯价格（诚实标注）
+        out = calc(dfv, factor.get("params") or {})
+        ent = out.get("entry") if isinstance(out, dict) else out
+        if ent is None or not hasattr(ent, "iloc"):
+            return None
+        return pd.Series(ent.values, index=df.index).astype(float)
+    except Exception as e:
+        print(f"[ea_bridge] 因子执行失败 {factor.get('name', '?')}: {e}")
+        return None
+
+
+def matching_factors(cfg: dict) -> list[dict]:
+    sym = (cfg or {}).get("symbol", "")
+    fs = load_factors()
+    if not sym:
+        return fs
+    return [f for f in fs if (f.get("symbol") or "").upper() == sym.upper()]
+
+
+def factor_decision(df: pd.DataFrame, cfg: dict, idx: int):
+    """多因子融合信号：候选 swing（基准）+ 匹配因子（OR）。返回 (dir, source, factor)。"""
+    sig = candidate_entry(df)
+    d0 = float(sig.iloc[idx]) if len(sig) else 0.0
+    src = "candidate"
+    fact = None
+    if d0 == 0.0:
+        for f in matching_factors(cfg):
+            es = run_factor(df, f)
+            if es is None:
+                continue
+            v = float(es.iloc[idx])
+            if v != 0.0:
+                d0 = 1.0 if v > 0 else -1.0
+                src = f.get("name", "factor")
+                fact = f
+                break
+    return (d0, src, fact)
+
+
+def sltp_from_factor(fact: dict | None) -> dict:
+    """读因子 sl_tp_strategy（ATR 倍数/移动止损/持仓上限），默认系统语义。"""
+    cfg = (fact or {}).get("sl_tp_strategy") or {}
+    def num(k, d):
+        v = cfg.get(k)
+        return float(v) if isinstance(v, (int, float)) else d
+    stop_atr = num("stop_atr_mult", SL_ATR_MULT)
+    if stop_atr <= 0:
+        stop_atr = SL_ATR_MULT
+    return {
+        "stop_atr": stop_atr,
+        "take_atr": stop_atr * num("take_atr_mult", TP_R_MULT) / num("stop_atr_mult", SL_ATR_MULT)
+                    if num("take_atr_mult", TP_R_MULT) > 0 else stop_atr * TP_R_MULT,
+        "tr_act_atr": num("trailing_activation_atr", HW_ACTIVATION_R * SL_ATR_MULT),
+        "tr_stop_atr": num("trailing_stop_atr", HW_RETRACE_ATR),
+        "max_hold": int(num("max_hold_bars", TIME_STOP_BARS)),
+    }
+
+
+def event_blocked(df: pd.DataFrame, idx: int) -> bool:
+    """事件过滤：当前 bar 在近事件 ±3 根（M30）内 -> 不开仓。"""
+    evs = _api_get("/api/events")
+    if not isinstance(evs, dict):
+        return False
+    items = evs.get("items") or evs.get("events") or []
+    cur = df.index[idx]
+    for e in items:
+        t = e.get("time") or e.get("datetime")
+        if not t:
+            continue
+        try:
+            et = pd.Timestamp(t)
+            if abs((cur - et).total_seconds()) <= 3 * 1800:
+                return True
+        except Exception:
+            pass
+    return False
+
+
+def risk_lot(balance: float, sl_dist: float, cur_price: float) -> float:
+    """风控板块：仓位 = 1% 风险 / (止损距离占价比例)（近似 1 标准手=10 万单位）。失败回退 0.01。"""
+    try:
+        if sl_dist > 0 and cur_price > 0 and balance > 0:
+            risk = balance * 0.01
+            pct = sl_dist / cur_price
+            lot = round(risk / (pct * 100000), 2)
+            if lot > 0:
+                return max(0.01, min(lot, 1.0))
+    except Exception:
+        pass
+    return VOL_FIXED
+
+
+# ================= 桥通道 =================
+
 def read_config() -> dict:
     cfg = {}
     if os.path.exists(CONFIG_FILE):
@@ -95,8 +230,7 @@ def read_config() -> dict:
 
 def append_cmd(seq: int, cmd: str, *args) -> None:
     # 容错：EA 在测试重启（OnInit）会清空 cmds.csv（FileOpen FILE_WRITE 持锁），
-    # 与桥的 append 可能冲突（Windows 文件锁 PermissionError）——重试几次，仍失败则跳过
-    #（下轮循环再试），绝不让桥崩溃。
+    # 与桥的 append 可能冲突（Windows 文件锁 PermissionError）——重试几次，仍失败则跳过（下轮再试）。
     vals = []
     for a in args:
         vals.append(round(float(a), 5) if isinstance(a, (int, float)) else a)
@@ -195,19 +329,21 @@ def main() -> None:
         with open(TRADES_FILE, "w", newline="") as f:
             csv.writer(f).writerow(["kind", "time", "price", "dir", "vol"])
 
-    print("[ea_bridge] system-side ready | decision+stats in system, EA is pure executor")
+    print("[ea_bridge] system-side ready | Tester 决策调度器 v2（因子库+SLTP配置+事件+风控 参与）")
     cfg = read_config()
     if cfg:
         print(f"[ea_bridge] test context: symbol={cfg.get('symbol')} period={cfg.get('period')} "
               f"balance={cfg.get('balance')} leverage={cfg.get('leverage')} start={cfg.get('start')}")
+    facs = load_factors()
+    print(f"[ea_bridge] 因子库 active 因子 {len(facs)} 个参与匹配"
+          + (f"，本测试匹配 {len(matching_factors(cfg))} 个" if cfg else ""))
 
     seen_bars = 0
     seq = 0
     open_info: dict | None = None
     trades_known = 0
 
-    # 重启恢复：若已有持仓（trades 有 in 未配对），重建 open_info（近似：extreme/时间停从当前起，
-    # sl 下轮 holding 会自动重算并发 MODIFY 接管）——重启不丢持仓。
+    # 重启恢复：若已有持仓（trades 有 in 未配对），重建 open_info（近似）——重启不丢持仓。
     rows0 = read_trades()
     n_open0 = max(0,
                   sum(1 for r in rows0 if r["kind"] == "in")
@@ -215,6 +351,7 @@ def main() -> None:
     if n_open0 > 0:
         df0 = read_bars()
         last_in = [r for r in rows0 if r["kind"] == "in"][-1]
+        sc = sltp_from_factor(None)
         open_info = {
             "idx": max(0, len(df0) - 1),
             "entry": last_in["price"],
@@ -222,6 +359,9 @@ def main() -> None:
             "sl": 0.0, "tp": 0.0,
             "extreme": last_in["price"],
             "sl_sent": 0.0, "wait_in": False,
+            "stop_atr": sc["stop_atr"], "tr_act_atr": sc["tr_act_atr"],
+            "tr_stop_atr": sc["tr_stop_atr"], "max_hold": sc["max_hold"],
+            "src": "restored",
         }
         print(f"[ea_bridge] 重启恢复持仓 entry={last_in['price']:.3f} dir={'LONG' if open_info['dir'] > 0 else 'SHORT'} "
               f"bar#{open_info['idx']}（移动止损/时间停自动接管）")
@@ -235,29 +375,39 @@ def main() -> None:
 
         if len(df) > seen_bars and len(df) >= MIN_BARS:
             seen_bars = len(df)
-            sig = candidate_entry(df)
-            latest = float(sig.iloc[-1]) if len(sig) else 0.0
-            atr_s = _atr(df, ATR_PERIOD)
             idx = len(df) - 1
             close = float(df["close"].iloc[idx])
+            atr_s = _atr(df, ATR_PERIOD)
+            atr = float(atr_s.iloc[idx]) if len(atr_s) and not pd.isna(atr_s.iloc[idx]) else close * 0.005
+            if atr <= 0:
+                atr = close * 0.005
 
             if open_info is None:
-                if n_open == 0 and latest != 0:
-                    # OPEN：价位由系统算（2ATR 止损 / 3R 止盈），EA 市价执行
-                    atr = float(atr_s.iloc[idx]) if len(atr_s) and not pd.isna(atr_s.iloc[idx]) else close * 0.005
-                    if atr <= 0:
-                        atr = close * 0.005
-                    stop_dist = atr * SL_ATR_MULT
-                    d = 1 if latest > 0 else -1
-                    sl = round(close - d * stop_dist, 5)
-                    tp = round(close + d * stop_dist * TP_R_MULT, 5)
-                    seq += 1
-                    append_cmd(seq, "OPEN", d, sl, tp, VOL_FIXED)
-                    open_info = {"idx": idx, "entry": close, "dir": d, "sl": sl, "tp": tp,
-                                 "extreme": float(df["high"].iloc[idx]) if d > 0 else float(df["low"].iloc[idx]),
-                                 "sl_sent": sl, "wait_in": True}
-                    print(f"[ea_bridge] OPEN seq={seq} dir={'LONG' if d > 0 else 'SHORT'} "
-                          f"ref={close:.3f} sl={sl:.3f} tp={tp:.3f} bar#{idx} (wait in)")
+                if n_open == 0:
+                    d0, src, fact = factor_decision(df, cfg, idx)
+                    if d0 != 0.0:
+                        if event_blocked(df, idx):
+                            print(f"[ea_bridge] 事件窗口，跳过信号（{src}）bar#{idx}")
+                        else:
+                            sc = sltp_from_factor(fact)
+                            stop = atr * sc["stop_atr"]
+                            d = 1 if d0 > 0 else -1
+                            sl = round(close - d * stop, 5)
+                            tp = round(close + d * stop * sc["take_atr"] / sc["stop_atr"], 5)
+                            vol = risk_lot(float(cfg.get("balance") or 10000), stop, close)
+                            seq += 1
+                            append_cmd(seq, "OPEN", d, sl, tp, vol)
+                            open_info = {
+                                "idx": idx, "entry": close, "dir": d, "sl": sl, "tp": tp,
+                                "extreme": float(df["high"].iloc[idx]) if d > 0 else float(df["low"].iloc[idx]),
+                                "sl_sent": sl, "wait_in": True,
+                                "stop_atr": sc["stop_atr"], "tr_act_atr": sc["tr_act_atr"],
+                                "tr_stop_atr": sc["tr_stop_atr"], "max_hold": sc["max_hold"],
+                                "src": src,
+                            }
+                            print(f"[ea_bridge] OPEN seq={seq} dir={'LONG' if d > 0 else 'SHORT'} "
+                                  f"ref={close:.3f} sl={sl:.3f} tp={tp:.3f} vol={vol} "
+                                  f"source={src} bar#{idx} (wait in)")
 
             elif open_info.get("wait_in"):
                 # 已发 OPEN，等 EA 回报 in
@@ -279,25 +429,22 @@ def main() -> None:
                 open_info = None
 
             else:
-                # holding：移动止损 + 时间停（决策在系统）
+                # holding：移动止损（因子 trailing 参数）+ 时间停（决策在系统）
                 oi = open_info
-                atr = float(atr_s.iloc[idx]) if len(atr_s) and not pd.isna(atr_s.iloc[idx]) else oi["entry"] * 0.005
-                if atr <= 0:
-                    atr = oi["entry"] * 0.005
                 sl = oi["sl"]
-                r = 0.0
+                r_atr = 0.0
                 if oi["dir"] > 0:
                     extreme = max(oi["extreme"], float(df["high"].iloc[idx]))
-                    r = (extreme - oi["entry"]) / (atr * SL_ATR_MULT)
-                    if r >= HW_ACTIVATION_R:
-                        new_sl = max(oi["sl"], round(extreme - atr * HW_RETRACE_ATR, 5))
+                    r_atr = (extreme - oi["entry"]) / atr
+                    if r_atr >= oi["tr_act_atr"]:
+                        new_sl = max(oi["sl"], round(extreme - atr * oi["tr_stop_atr"], 5))
                         if new_sl > oi["sl_sent"]:
                             sl = new_sl
                 else:
                     extreme = min(oi["extreme"], float(df["low"].iloc[idx]))
-                    r = (oi["entry"] - extreme) / (atr * SL_ATR_MULT)
-                    if r >= HW_ACTIVATION_R:
-                        new_sl = min(oi["sl"], round(extreme + atr * HW_RETRACE_ATR, 5))
+                    r_atr = (oi["entry"] - extreme) / atr
+                    if r_atr >= oi["tr_act_atr"]:
+                        new_sl = min(oi["sl"], round(extreme + atr * oi["tr_stop_atr"], 5))
                         if new_sl < oi["sl_sent"]:
                             sl = new_sl
                 open_info["extreme"] = extreme
@@ -307,9 +454,9 @@ def main() -> None:
                     seq += 1
                     append_cmd(seq, "MODIFY_SL", sl)
                     open_info["sl_sent"] = sl
-                    print(f"[ea_bridge] MODIFY_SL seq={seq} sl={sl:.3f} (trailing r={r:.2f}R) bar#{idx}")
+                    print(f"[ea_bridge] MODIFY_SL seq={seq} sl={sl:.3f} (trailing {r_atr:.2f}ATR/{oi['tr_act_atr']:.2f}) bar#{idx}")
 
-                if idx - oi["idx"] >= TIME_STOP_BARS and oi.get("close_sent") is None:
+                if idx - oi["idx"] >= oi["max_hold"] and oi.get("close_sent") is None:
                     seq += 1
                     append_cmd(seq, "CLOSE")
                     open_info["close_sent"] = True
