@@ -22,6 +22,7 @@ from config import settings
 from market_data.service import MarketDataService
 from market_data.market_analysis import MarketAnalysisEngine
 from observability.notifier import Notifier
+from tools.factor_export import backup_db, export_json
 from oems.mt5_broker import MT5Broker
 from oems.mt5_gateway import MT5Gateway
 from oems.order_manager import OrderManager
@@ -318,6 +319,12 @@ async def lifespan(app: FastAPI):
     state = AppState(broker_override=getattr(app.state, "broker_override", None))
     app.state.state = state
     restored = restore_saved_matcher_state(state)
+    # D12 备份自动化：启动即备份留痕（失败不阻断启动）
+    try:
+        await asyncio.to_thread(backup_db)
+        await asyncio.to_thread(export_json)
+    except Exception as exc:  # noqa: BLE001
+        print(f"[boot-backup] 启动备份失败（不阻断）：{exc}")
     state.background_task = asyncio.create_task(_system_loop(state))
     yield
     if state.background_task:

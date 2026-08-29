@@ -62,6 +62,9 @@ def test_restore_saved_matcher_state_applies_config():
                 },
             }
 
+        def get_sltp_policy(self):
+            return None
+
         def get_system_state(self):
             return self.saved
 
@@ -103,6 +106,9 @@ def test_restore_saved_matcher_state_skips_when_paused():
             self.config = config
 
     class FakeRepo:
+        def get_sltp_policy(self):
+            return None
+
         def get_system_state(self):
             return {
                 "matcher_running": False,

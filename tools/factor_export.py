@@ -48,20 +48,30 @@ def rows_as_dicts(con: sqlite3.Connection, table: str, fields: list[str]) -> lis
     return out
 
 
-def backup_db() -> Path:
+def backup_db(keep: int = 14) -> Path:
+    """在线备份 DB，并保留最近 keep 份（旧备份自动清理）。启动自动备份也走这里。"""
     BACKUP_DIR.mkdir(parents=True, exist_ok=True)
     src = sqlite3.connect(DB)
+    dst_path = BACKUP_DIR / f"factor_store_{stamp()}.db"
     try:
-        dst_path = BACKUP_DIR / f"factor_store_{stamp()}.db"
         dst = sqlite3.connect(dst_path)
         try:
             src.backup(dst)  # 在线备份：后端写入中也能得到一致快照
             print(f"DB 备份完成 -> {dst_path}")
-            return dst_path
         finally:
             dst.close()
     finally:
         src.close()
+    # 保留策略：只保留最近 keep 份
+    olds = sorted(BACKUP_DIR.glob("factor_store_*.db"))
+    if len(olds) > keep:
+        for f in olds[:-keep]:
+            try:
+                f.unlink()
+                print(f"清理旧备份 -> {f.name}")
+            except OSError:
+                pass
+    return dst_path
 
 
 def export_json() -> Path:
