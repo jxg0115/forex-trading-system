@@ -11,7 +11,7 @@ const CAND_SIZES = [200, 500, 1000, 2000];
 // 品种下拉兜底：MT5 已连接时会把账户可交易品种合并进来（可手动输入任意品种）
 const COMMON_SYMBOLS = [
   "EURUSD", "GBPUSD", "USDJPY", "USDCHF", "USDCAD", "AUDUSD", "NZDUSD",
-  "EURJPY", "GBPJPY", "AUDJPY", "EURGBP", "EURAUD", "XAUUSD", "XAGUSD",
+  "EURJPY", "GBPJPY", "AUDJPY", "EURGBP", "EURAUD", "GOLD", "XAGUSD",
   "US30", "NAS100", "SP500", "BTCUSD",
 ];
 

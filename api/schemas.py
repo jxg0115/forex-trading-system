@@ -94,7 +94,7 @@ class ReplayExportRequest(BaseModel):
 
 class PortfolioBacktestRequest(BaseModel):
     """组合历史回测：启用因子 + 多周期方向过滤 + 实盘 sltp 策略整体验证（只读离线）。"""
-    symbol: str = "XAUUSD"
+    symbol: str = "GOLD"
     timeframe: str = "M30"
     date_from: str | None = None
     date_to: str | None = None

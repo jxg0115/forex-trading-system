@@ -2,3 +2,5 @@ INFO:     Started server process [16520]
 INFO:     Waiting for application startup.
 INFO:     Application startup complete.
 INFO:     Uvicorn running on http://127.0.0.1:8002 (Press CTRL+C to quit)
+INFO:     127.0.0.1:62175 - "WebSocket /api/mt5/ws/tick?symbol=EURUSD" [accepted]
+INFO:     connection open

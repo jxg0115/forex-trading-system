@@ -201,6 +201,38 @@ class MT5Gateway:
             "time": tick.time,
         }
 
+    def copy_ticks_range(
+        self, symbol: str, date_from: datetime, date_to: datetime
+    ) -> list[dict[str, Any]]:
+        """历史 tick 回填：MT5 copy_ticks_range（全 tick，含时间戳/买卖价/量）。"""
+
+        if not self.is_connected and not self.connect():
+            return []
+        mt5 = self._require_mt5()
+        ticks = mt5.copy_ticks_range(symbol, date_from, date_to, mt5.COPY_TICKS_ALL)
+        if ticks is None or len(ticks) == 0:
+            return []
+        out: list[dict[str, Any]] = []
+        for t in ticks:
+            # 终端版本差异：字段可能是 time_ms 或 time（毫秒），逐个防御取值
+            fnames = getattr(getattr(t, "dtype", None), "names", None) or ()
+            if "time_ms" in fnames:
+                time_ms = int(t["time_ms"])  # 毫秒
+            else:
+                time_ms = int(float(t["time"]) * 1000.0)  # 秒 → 毫秒（此终端 time 为秒）
+            out.append(
+                {
+                    "time_ms": time_ms,
+                    "time": float(time_ms) / 1000.0,
+                    "bid": float(t["bid"]) if "bid" in fnames else 0.0,
+                    "ask": float(t["ask"]) if "ask" in fnames else 0.0,
+                    "last": float(t["last"]) if "last" in fnames else 0.0,
+                    "volume": float(t["volume"]) if "volume" in fnames else 0.0,
+                    "flags": int(t["flags"]) if "flags" in fnames else 0,
+                }
+            )
+        return out
+
     def get_rates(self, symbol: str, timeframe: str = "M15", count: int = 300) -> list[dict[str, Any]]:
         """拉取历史/实时 OHLCV K 线序列。"""
 

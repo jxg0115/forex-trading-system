@@ -468,7 +468,7 @@ async def learn_from_trades(
         (_as_utc(t.exit_time) or _as_utc(t.entry_time) for t in trades),
         default=None,
     )
-    base_symbols = ["EURUSD", "GBPUSD", "USDJPY", "XAUUSD"]
+    base_symbols = ["EURUSD", "GBPUSD", "USDJPY", "GOLD"]
     alt_symbols = [s for s in base_symbols if s != symbol][:2] or base_symbols[:2]
     tf_map = {"M1": "M5", "M5": "M15", "M15": "M30", "M30": "H1", "H1": "H4", "H4": "D1", "D1": "M15"}
     cross_combos = [(s, timeframe) for s in alt_symbols] + [(symbol, tf_map.get(timeframe.upper(), "M30"))]

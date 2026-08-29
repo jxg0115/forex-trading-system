@@ -1,0 +1,488 @@
+{
+ "events": [
+  {
+   "id": "nfp-2025-01",
+   "dt": "2025-01-03T13:30:00Z",
+   "type": "nfp",
+   "title": "非农就业报告 (NFP)",
+   "importance": "high",
+   "symbols": [
+    "GOLD",
+    "EURUSD",
+    "USDJPY"
+   ],
+   "source": "routine"
+  },
+  {
+   "id": "nfp-2025-02",
+   "dt": "2025-02-07T13:30:00Z",
+   "type": "nfp",
+   "title": "非农就业报告 (NFP)",
+   "importance": "high",
+   "symbols": [
+    "GOLD",
+    "EURUSD",
+    "USDJPY"
+   ],
+   "source": "routine"
+  },
+  {
+   "id": "nfp-2025-03",
+   "dt": "2025-03-07T13:30:00Z",
+   "type": "nfp",
+   "title": "非农就业报告 (NFP)",
+   "importance": "high",
+   "symbols": [
+    "GOLD",
+    "EURUSD",
+    "USDJPY"
+   ],
+   "source": "routine"
+  },
+  {
+   "id": "nfp-2025-04",
+   "dt": "2025-04-04T13:30:00Z",
+   "type": "nfp",
+   "title": "非农就业报告 (NFP)",
+   "importance": "high",
+   "symbols": [
+    "GOLD",
+    "EURUSD",
+    "USDJPY"
+   ],
+   "source": "routine"
+  },
+  {
+   "id": "nfp-2025-05",
+   "dt": "2025-05-02T13:30:00Z",
+   "type": "nfp",
+   "title": "非农就业报告 (NFP)",
+   "importance": "high",
+   "symbols": [
+    "GOLD",
+    "EURUSD",
+    "USDJPY"
+   ],
+   "source": "routine"
+  },
+  {
+   "id": "nfp-2025-06",
+   "dt": "2025-06-06T13:30:00Z",
+   "type": "nfp",
+   "title": "非农就业报告 (NFP)",
+   "importance": "high",
+   "symbols": [
+    "GOLD",
+    "EURUSD",
+    "USDJPY"
+   ],
+   "source": "routine"
+  },
+  {
+   "id": "nfp-2025-07",
+   "dt": "2025-07-04T13:30:00Z",
+   "type": "nfp",
+   "title": "非农就业报告 (NFP)",
+   "importance": "high",
+   "symbols": [
+    "GOLD",
+    "EURUSD",
+    "USDJPY"
+   ],
+   "source": "routine"
+  },
+  {
+   "id": "nfp-2025-08",
+   "dt": "2025-08-01T13:30:00Z",
+   "type": "nfp",
+   "title": "非农就业报告 (NFP)",
+   "importance": "high",
+   "symbols": [
+    "GOLD",
+    "EURUSD",
+    "USDJPY"
+   ],
+   "source": "routine"
+  },
+  {
+   "id": "nfp-2025-09",
+   "dt": "2025-09-05T13:30:00Z",
+   "type": "nfp",
+   "title": "非农就业报告 (NFP)",
+   "importance": "high",
+   "symbols": [
+    "GOLD",
+    "EURUSD",
+    "USDJPY"
+   ],
+   "source": "routine"
+  },
+  {
+   "id": "nfp-2025-10",
+   "dt": "2025-10-03T13:30:00Z",
+   "type": "nfp",
+   "title": "非农就业报告 (NFP)",
+   "importance": "high",
+   "symbols": [
+    "GOLD",
+    "EURUSD",
+    "USDJPY"
+   ],
+   "source": "routine"
+  },
+  {
+   "id": "nfp-2025-11",
+   "dt": "2025-11-07T13:30:00Z",
+   "type": "nfp",
+   "title": "非农就业报告 (NFP)",
+   "importance": "high",
+   "symbols": [
+    "GOLD",
+    "EURUSD",
+    "USDJPY"
+   ],
+   "source": "routine"
+  },
+  {
+   "id": "nfp-2025-12",
+   "dt": "2025-12-05T13:30:00Z",
+   "type": "nfp",
+   "title": "非农就业报告 (NFP)",
+   "importance": "high",
+   "symbols": [
+    "GOLD",
+    "EURUSD",
+    "USDJPY"
+   ],
+   "source": "routine"
+  },
+  {
+   "id": "nfp-2026-01",
+   "dt": "2026-01-02T13:30:00Z",
+   "type": "nfp",
+   "title": "非农就业报告 (NFP)",
+   "importance": "high",
+   "symbols": [
+    "GOLD",
+    "EURUSD",
+    "USDJPY"
+   ],
+   "source": "routine"
+  },
+  {
+   "id": "nfp-2026-02",
+   "dt": "2026-02-06T13:30:00Z",
+   "type": "nfp",
+   "title": "非农就业报告 (NFP)",
+   "importance": "high",
+   "symbols": [
+    "GOLD",
+    "EURUSD",
+    "USDJPY"
+   ],
+   "source": "routine"
+  },
+  {
+   "id": "nfp-2026-03",
+   "dt": "2026-03-06T13:30:00Z",
+   "type": "nfp",
+   "title": "非农就业报告 (NFP)",
+   "importance": "high",
+   "symbols": [
+    "GOLD",
+    "EURUSD",
+    "USDJPY"
+   ],
+   "source": "routine"
+  },
+  {
+   "id": "nfp-2026-04",
+   "dt": "2026-04-03T13:30:00Z",
+   "type": "nfp",
+   "title": "非农就业报告 (NFP)",
+   "importance": "high",
+   "symbols": [
+    "GOLD",
+    "EURUSD",
+    "USDJPY"
+   ],
+   "source": "routine"
+  },
+  {
+   "id": "nfp-2026-05",
+   "dt": "2026-05-01T13:30:00Z",
+   "type": "nfp",
+   "title": "非农就业报告 (NFP)",
+   "importance": "high",
+   "symbols": [
+    "GOLD",
+    "EURUSD",
+    "USDJPY"
+   ],
+   "source": "routine"
+  },
+  {
+   "id": "nfp-2026-06",
+   "dt": "2026-06-05T13:30:00Z",
+   "type": "nfp",
+   "title": "非农就业报告 (NFP)",
+   "importance": "high",
+   "symbols": [
+    "GOLD",
+    "EURUSD",
+    "USDJPY"
+   ],
+   "source": "routine"
+  },
+  {
+   "id": "nfp-2026-07",
+   "dt": "2026-07-03T13:30:00Z",
+   "type": "nfp",
+   "title": "非农就业报告 (NFP)",
+   "importance": "high",
+   "symbols": [
+    "GOLD",
+    "EURUSD",
+    "USDJPY"
+   ],
+   "source": "routine"
+  },
+  {
+   "id": "nfp-2026-08",
+   "dt": "2026-08-07T13:30:00Z",
+   "type": "nfp",
+   "title": "非农就业报告 (NFP)",
+   "importance": "high",
+   "symbols": [
+    "GOLD",
+    "EURUSD",
+    "USDJPY"
+   ],
+   "source": "routine"
+  },
+  {
+   "id": "nfp-2026-09",
+   "dt": "2026-09-04T13:30:00Z",
+   "type": "nfp",
+   "title": "非农就业报告 (NFP)",
+   "importance": "high",
+   "symbols": [
+    "GOLD",
+    "EURUSD",
+    "USDJPY"
+   ],
+   "source": "routine"
+  },
+  {
+   "id": "nfp-2026-10",
+   "dt": "2026-10-02T13:30:00Z",
+   "type": "nfp",
+   "title": "非农就业报告 (NFP)",
+   "importance": "high",
+   "symbols": [
+    "GOLD",
+    "EURUSD",
+    "USDJPY"
+   ],
+   "source": "routine"
+  },
+  {
+   "id": "nfp-2026-11",
+   "dt": "2026-11-06T13:30:00Z",
+   "type": "nfp",
+   "title": "非农就业报告 (NFP)",
+   "importance": "high",
+   "symbols": [
+    "GOLD",
+    "EURUSD",
+    "USDJPY"
+   ],
+   "source": "routine"
+  },
+  {
+   "id": "nfp-2026-12",
+   "dt": "2026-12-04T13:30:00Z",
+   "type": "nfp",
+   "title": "非农就业报告 (NFP)",
+   "importance": "high",
+   "symbols": [
+    "GOLD",
+    "EURUSD",
+    "USDJPY"
+   ],
+   "source": "routine"
+  },
+  {
+   "id": "nfp-2027-01",
+   "dt": "2027-01-01T13:30:00Z",
+   "type": "nfp",
+   "title": "非农就业报告 (NFP)",
+   "importance": "high",
+   "symbols": [
+    "GOLD",
+    "EURUSD",
+    "USDJPY"
+   ],
+   "source": "routine"
+  },
+  {
+   "id": "nfp-2027-02",
+   "dt": "2027-02-05T13:30:00Z",
+   "type": "nfp",
+   "title": "非农就业报告 (NFP)",
+   "importance": "high",
+   "symbols": [
+    "GOLD",
+    "EURUSD",
+    "USDJPY"
+   ],
+   "source": "routine"
+  },
+  {
+   "id": "nfp-2027-03",
+   "dt": "2027-03-05T13:30:00Z",
+   "type": "nfp",
+   "title": "非农就业报告 (NFP)",
+   "importance": "high",
+   "symbols": [
+    "GOLD",
+    "EURUSD",
+    "USDJPY"
+   ],
+   "source": "routine"
+  },
+  {
+   "id": "nfp-2027-04",
+   "dt": "2027-04-02T13:30:00Z",
+   "type": "nfp",
+   "title": "非农就业报告 (NFP)",
+   "importance": "high",
+   "symbols": [
+    "GOLD",
+    "EURUSD",
+    "USDJPY"
+   ],
+   "source": "routine"
+  },
+  {
+   "id": "nfp-2027-05",
+   "dt": "2027-05-07T13:30:00Z",
+   "type": "nfp",
+   "title": "非农就业报告 (NFP)",
+   "importance": "high",
+   "symbols": [
+    "GOLD",
+    "EURUSD",
+    "USDJPY"
+   ],
+   "source": "routine"
+  },
+  {
+   "id": "nfp-2027-06",
+   "dt": "2027-06-04T13:30:00Z",
+   "type": "nfp",
+   "title": "非农就业报告 (NFP)",
+   "importance": "high",
+   "symbols": [
+    "GOLD",
+    "EURUSD",
+    "USDJPY"
+   ],
+   "source": "routine"
+  },
+  {
+   "id": "nfp-2027-07",
+   "dt": "2027-07-02T13:30:00Z",
+   "type": "nfp",
+   "title": "非农就业报告 (NFP)",
+   "importance": "high",
+   "symbols": [
+    "GOLD",
+    "EURUSD",
+    "USDJPY"
+   ],
+   "source": "routine"
+  },
+  {
+   "id": "nfp-2027-08",
+   "dt": "2027-08-06T13:30:00Z",
+   "type": "nfp",
+   "title": "非农就业报告 (NFP)",
+   "importance": "high",
+   "symbols": [
+    "GOLD",
+    "EURUSD",
+    "USDJPY"
+   ],
+   "source": "routine"
+  },
+  {
+   "id": "nfp-2027-09",
+   "dt": "2027-09-03T13:30:00Z",
+   "type": "nfp",
+   "title": "非农就业报告 (NFP)",
+   "importance": "high",
+   "symbols": [
+    "GOLD",
+    "EURUSD",
+    "USDJPY"
+   ],
+   "source": "routine"
+  },
+  {
+   "id": "nfp-2027-10",
+   "dt": "2027-10-01T13:30:00Z",
+   "type": "nfp",
+   "title": "非农就业报告 (NFP)",
+   "importance": "high",
+   "symbols": [
+    "GOLD",
+    "EURUSD",
+    "USDJPY"
+   ],
+   "source": "routine"
+  },
+  {
+   "id": "nfp-2027-11",
+   "dt": "2027-11-05T13:30:00Z",
+   "type": "nfp",
+   "title": "非农就业报告 (NFP)",
+   "importance": "high",
+   "symbols": [
+    "GOLD",
+    "EURUSD",
+    "USDJPY"
+   ],
+   "source": "routine"
+  },
+  {
+   "id": "nfp-2027-12",
+   "dt": "2027-12-03T13:30:00Z",
+   "type": "nfp",
+   "title": "非农就业报告 (NFP)",
+   "importance": "high",
+   "symbols": [
+    "GOLD",
+    "EURUSD",
+    "USDJPY"
+   ],
+   "source": "routine"
+  }
+ ],
+ "manual": [
+  {
+   "id": "fomc-2026-03",
+   "dt": "2026-03-18T12:00:00Z",
+   "type": "fomc",
+   "title": "FOMC 利率决议",
+   "importance": "high",
+   "symbols": [
+    "GOLD",
+    "EURUSD",
+    "USDJPY"
+   ],
+   "note": "手工维护示例",
+   "source": "manual"
+  }
+ ]
+}

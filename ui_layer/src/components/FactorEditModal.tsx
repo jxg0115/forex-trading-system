@@ -134,7 +134,7 @@ export function FactorEditModal({ factor, onSave, onClose }: Props) {
           <option value="正常">正常</option>
         </select>
         <label className="modal-label">适配品种（逗号分隔，留空表示全部）</label>
-        <input className="form-input" value={(marketAdapt.symbols as string[] ?? []).join(", ")} onChange={(e) => setMarketAdapt((v) => ({ ...v, symbols: e.target.value.split(",").map((s) => s.trim()).filter(Boolean) }))} placeholder="例如：XAUUSD, EURUSD" />
+        <input className="form-input" value={(marketAdapt.symbols as string[] ?? []).join(", ")} onChange={(e) => setMarketAdapt((v) => ({ ...v, symbols: e.target.value.split(",").map((s) => s.trim()).filter(Boolean) }))} placeholder="例如：GOLD, EURUSD" />
         <div className="row-actions" style={{ marginTop: 10 }}>
           <button className="mini-btn" onClick={checkSandbox}><ShieldCheck size={12} /> 沙盒校验</button>
           <button className="mini-btn" onClick={runDiagnose} disabled={diagnosing}><ShieldCheck size={12} /> 沙盒测试排查</button>
