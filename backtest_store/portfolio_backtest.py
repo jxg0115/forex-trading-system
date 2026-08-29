@@ -276,3 +276,54 @@ class PortfolioBacktestJob:
                 {"running": False, "message": f"组合回测失败：{exc}", "finished_at": time.strftime("%Y-%m-%d %H:%M:%S")}
             )
         return self.status
+
+
+def combine_portfolio(
+    trades_by_symbol: dict[str, list[dict[str, Any]]],
+    weights: dict[str, float] | None = None,
+) -> dict[str, Any]:
+    """多品种组合账本（D4）：各品种独立回测的 trades 按时间合并（等权/可配权重）。
+
+    每品种每笔 pnl_pct × 品种权重 → 组合每笔；按 entry_time 排序推进组合曲线。
+    """
+    n = len(trades_by_symbol)
+    if n == 0:
+        return {"symbols": [], "weights": {}, "num_trades": 0, "win_rate_pct": 0.0,
+                "profit_factor": 0.0, "total_return_pct": 0.0, "max_drawdown_pct": 0.0, "per_symbol": {}}
+    weights = weights or {s: 1.0 / n for s in trades_by_symbol}
+    merged: list[dict[str, Any]] = []
+    for s, trades in trades_by_symbol.items():
+        w = weights.get(s, 1.0 / n)
+        for t in trades:
+            merged.append(
+                {
+                    "symbol": s,
+                    "entry_time": t.get("entry_time") or t.get("time"),
+                    "pnl_pct": round(float(t.get("pnl_pct") or 0.0) * w, 4),
+                    "pnl": round(float(t.get("pnl") or 0.0) * w, 4),
+                    "direction": t.get("direction"),
+                }
+            )
+    merged.sort(key=lambda t: str(t["entry_time"]))
+    pnls = [t["pnl_pct"] for t in merged]
+    wins = [p for p in pnls if p > 0]
+    loss = abs(sum(p for p in pnls if p < 0))
+    total = sum(pnls)
+    pf = (min(sum(wins) / loss, 99.0) if loss > 0 else (99.0 if sum(wins) > 0 else 0.0))
+    peak = 0.0
+    equity = 0.0
+    max_dd = 0.0
+    for p in pnls:
+        equity += p
+        peak = max(peak, equity)
+        max_dd = min(max_dd, equity - peak)
+    return {
+        "symbols": sorted(trades_by_symbol.keys()),
+        "weights": {s: round(weights.get(s, 0.0), 4) for s in trades_by_symbol},
+        "num_trades": len(pnls),
+        "win_rate_pct": round(len(wins) / len(pnls) * 100.0, 2) if pnls else 0.0,
+        "profit_factor": round(pf, 2),
+        "total_return_pct": round(total, 2),
+        "max_drawdown_pct": round(max_dd, 2),
+        "per_symbol": {s: len(trades) for s, t in trades_by_symbol.items()},
+    }

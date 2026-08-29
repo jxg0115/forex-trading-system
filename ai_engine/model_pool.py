@@ -113,9 +113,74 @@ class ThresholdMomentumModel(TradingModel):
         }
 
 
+class GradientBoostingModel(TradingModel):
+    """GBDT 评分因子（sklearn GradientBoostingClassifier）：动量+波动特征，未来 3 根收益方向二分类。
+
+    概率作为评分；signal 由阈值 0.60/0.40 决定（比 logistic 更严）；有效与否由 D5 A/B 报告裁决。
+    """
+
+    name = "gbdt_momentum"
+    description = "基于 GBDT 的多特征评分因子（sklearn）"
+
+    def __init__(self) -> None:
+        self.model: Any = None
+        self.metrics: dict[str, Any] = {}
+
+    def _features(self, df: pd.DataFrame) -> pd.DataFrame:
+        close = df["close"]
+        return pd.DataFrame(
+            {
+                "ret5": close.pct_change(5),
+                "ret10": close.pct_change(10),
+                "rsi": rsi(close, 14) / 100.0 - 0.5,
+                "atr_ratio": atr_series(df, 14) / close,
+                "ema_spread": (ema(close, 12) - ema(close, 26)) / close,
+                "vol20": close.pct_change().rolling(20).std(),
+            }
+        )
+
+    def train(self, df: pd.DataFrame) -> dict[str, Any]:
+        features = self._features(df).dropna()
+        if len(features) < 60:
+            raise ValueError("样本不足，无法训练 GBDT（至少需要 60 根有效 K 线）")
+        target = (df["close"].shift(-3) > df["close"]).astype(int).reindex(features.index).fillna(0)
+        X = features.to_numpy(dtype=float)
+        y = target.to_numpy(dtype=int)
+
+        from sklearn.ensemble import GradientBoostingClassifier
+        from sklearn.metrics import roc_auc_score
+
+        self.model = GradientBoostingClassifier(
+            n_estimators=200, learning_rate=0.08, max_depth=3, subsample=0.9, random_state=42
+        )
+        self.model.fit(X, y)
+        prob = self.model.predict_proba(X)[:, 1]
+        self.metrics = {
+            "auc": round(float(roc_auc_score(y, prob)), 4),
+            "ic": round(float(np.corrcoef(prob, y)[0, 1]), 4),
+            "accuracy": round(float(((prob > 0.5).astype(int) == y).mean()), 4),
+            "samples": int(len(y)),
+        }
+        return dict(self.metrics)
+
+    def predict(self, df: pd.DataFrame) -> dict[str, Any]:
+        features = self._features(df).dropna()
+        if self.model is None or len(features) == 0:
+            return {"signal": "none", "confidence": 0.5, "probability": 0.5}
+        X = features.iloc[-1].to_numpy(dtype=float).reshape(1, -1)
+        prob = float(self.model.predict_proba(X)[:, 1][0])
+        signal = "long" if prob >= 0.60 else "short" if prob <= 0.40 else "none"
+        return {
+            "signal": signal,
+            "confidence": round(float(max(prob, 1 - prob)), 3),
+            "probability": round(prob, 3),
+        }
+
+
 MODEL_REGISTRY: dict[str, type[TradingModel]] = {
     LogisticMomentumModel.name: LogisticMomentumModel,
     ThresholdMomentumModel.name: ThresholdMomentumModel,
+    GradientBoostingModel.name: GradientBoostingModel,
 }
 
 
