@@ -34,7 +34,8 @@ if _HERE not in sys.path:
 
 from tools.rolling_recheck import candidate_entry  # 复用：与回测同一候选、同一信号序列
 
-BRIDGE_DIR = r"D:\dsh\ea_bridge"
+# EA 在 Tester 沙箱内只能写 Common 文件（FILE_COMMON）——桥读 Common\Files\dsb
+BRIDGE_DIR = r"C:\Users\xg\AppData\Roaming\MetaQuotes\Terminal\Common\Files\dsb"
 CONFIG_FILE = os.path.join(BRIDGE_DIR, "bridge_config.csv")
 BARS_FILE = os.path.join(BRIDGE_DIR, "bars.csv")
 CMDS_FILE = os.path.join(BRIDGE_DIR, "cmds.csv")

@@ -18,7 +18,9 @@ DSH_Bridge_EA.mq5（D:\MT4BC\MQL5\Experts\，已编译 ex5）
                → stats.txt + equity.csv（D:\dsh\ea_bridge\）
 ```
 
-## 二、文件约定（D:\dsh\ea_bridge\）
+## 二、文件约定（`Common\Files\dsb`：`C:\Users\xg\AppData\Roaming\MetaQuotes\Terminal\Common\Files\dsb\`）
+
+> **重要**：MT5 策略测试器（Tester 沙箱）只允许 EA 写 **Common 文件**（`FILE_COMMON` 标志）——绝对路径（如 `D:\dsh`）会被静默拒绝（EA 文件写失败且不报错，表现为"没有数据"）。桥目录统一用 `Common\Files\dsb`（EA 与系统桥共用）。
 
 | 文件 | 谁写 | 内容 |
 |---|---|---|
@@ -44,7 +46,7 @@ DSH_Bridge_EA.mq5（D:\MT4BC\MQL5\Experts\，已编译 ex5）
    - 入金 / 杠杆：按测试设置（EA 与系统自动获知）
    - 勾选「移动止损止盈」默认由系统负责（系统即移动止损逻辑，无需 MT5 勾选）
 3. 点「开始」：Tester 回放 → EA 转发 bar → 系统算决策发指令 → EA 执行 → 回合成交
-4. 运行中/结束后：**系统统计**看 `D:\dsh\ea_bridge\stats.txt`（笔数/胜率/PF/最大亏损/最高盈利）与 `equity.csv`（曲线）；**MT5 Tester 报告**看成交明细/净值曲线（自行核对）
+4. 运行中/结束后：**系统统计**看 `Common\Files\dsb\stats.txt`（笔数/胜率/PF/最大亏损/最高盈利）与 `equity.csv`（曲线）；**MT5 Tester 报告**看成交明细/净值曲线（自行核对）
 
 ## 四、统计口径（诚实标注）
 
@@ -71,4 +73,4 @@ Tester 报告（你看到）与 系统统计 与 系统历史回测（rolling_re
 
 - EA（源 + 编译 ex5）：`C:\Users\xg\AppData\Roaming\MetaQuotes\Terminal\AD19930FB9E178C6A37EC8F2329F4307\MQL5\Experts\DSH_Bridge_EA.mq5`（源副本 `D:\MT4BC\MQL5\Experts\`；MetaEditor64 编译）
 - 系统桥：`tools/ea_bridge.py`
-- 桥目录：`D:\dsh\ea_bridge\`
+- 桥目录：`Common\Files\dsb`（`C:\Users\xg\AppData\Roaming\MetaQuotes\Terminal\Common\Files\dsb\`）——Tester 沙箱只允许 EA 写 Common 文件（FILE_COMMON）
