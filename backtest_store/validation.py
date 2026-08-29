@@ -7,6 +7,7 @@ from typing import Any
 
 import pandas as pd
 
+from backtest_store.costs import cost_defaults
 from backtest_store.engine import Backtester
 from backtest_store.trade_extremes import _as_utc, _to_local_naive
 from sandbox.runner import execute_factor
@@ -19,6 +20,7 @@ def _bt_run(
     strategy: dict[str, Any],
     with_costs: bool = True,
     slippage: float = 0.0,
+    symbol: str = "",
 ) -> dict[str, Any] | None:
     try:
         execution = execute_factor(code, bars, params)
@@ -38,6 +40,7 @@ def _bt_run(
             "max_hold_bars": int(strategy.get("max_hold_bars", 120)),
             "commission_pct": 0.0002 if with_costs else 0.0,
             "slippage_price": slippage if with_costs else 0.0,
+            "symbol": symbol,
             **params,
         }
         return Backtester().run(df, entry, exit_sig, bt_params).model_dump()
@@ -209,25 +212,22 @@ def run_validation(
     validation_bars = bars[:split]
     oos_bars = bars[split:]
     slippage = 0.0
-    if gateway is not None:
-        try:
-            info = gateway.get_symbol_info(symbol)
-            if info:
-                slippage = float(info.get("point") or 0.0)
-        except Exception:
-            slippage = 0.0
-    validation_gross = _bt_run(validation_bars, code, params, strategy, with_costs=False)
-    validation = _bt_run(validation_bars, code, params, strategy, with_costs=True, slippage=slippage)
-    out_of_sample = _bt_run(oos_bars, code, params, strategy, with_costs=True, slippage=slippage)
+    try:  # 成本口径中心：按品种默认（GOLD 滑点 2 点/点差 10 点），不再依赖网关实时 point
+        slippage = cost_defaults(symbol)["slippage_price"]
+    except Exception:
+        slippage = 0.0
+    validation_gross = _bt_run(validation_bars, code, params, strategy, with_costs=False, symbol=symbol)
+    validation = _bt_run(validation_bars, code, params, strategy, with_costs=True, slippage=slippage, symbol=symbol)
+    out_of_sample = _bt_run(oos_bars, code, params, strategy, with_costs=True, slippage=slippage, symbol=symbol)
 
     oos_metrics = (out_of_sample or {}).get("metrics") or {}
     if oos_bars and oos_metrics.get("num_trades", 0) == 0 and len(bars) >= 100:
         split = max(1, int(len(bars) * 0.7))
         validation_bars = bars[:split]
         oos_bars = bars[split:]
-        validation_gross = _bt_run(validation_bars, code, params, strategy, with_costs=False)
-        validation = _bt_run(validation_bars, code, params, strategy, with_costs=True, slippage=slippage)
-        out_of_sample = _bt_run(oos_bars, code, params, strategy, with_costs=True, slippage=slippage)
+        validation_gross = _bt_run(validation_bars, code, params, strategy, with_costs=False, symbol=symbol)
+        validation = _bt_run(validation_bars, code, params, strategy, with_costs=True, slippage=slippage, symbol=symbol)
+        out_of_sample = _bt_run(oos_bars, code, params, strategy, with_costs=True, slippage=slippage, symbol=symbol)
         expanded_oos = True
     else:
         expanded_oos = False
@@ -243,9 +243,9 @@ def run_validation(
                 split = max(1, int(len(bars) * 0.7))
                 validation_bars = bars[:split]
                 oos_bars = bars[split:]
-                validation_gross = _bt_run(validation_bars, code, params, strategy, with_costs=False)
-                validation = _bt_run(validation_bars, code, params, strategy, with_costs=True, slippage=slippage)
-                out_of_sample = _bt_run(oos_bars, code, params, strategy, with_costs=True, slippage=slippage)
+                validation_gross = _bt_run(validation_bars, code, params, strategy, with_costs=False, symbol=symbol)
+                validation = _bt_run(validation_bars, code, params, strategy, with_costs=True, slippage=slippage, symbol=symbol)
+                out_of_sample = _bt_run(oos_bars, code, params, strategy, with_costs=True, slippage=slippage, symbol=symbol)
         except Exception:
             pass
 
@@ -278,15 +278,8 @@ def run_validation(
         cbars, cdisjoint = fetch_bars_after(market, gateway, csymbol, ctf, learning_end, limit=300)
         if not cbars:
             continue
-        cslippage = 0.0
-        if gateway is not None:
-            try:
-                cinfo = gateway.get_symbol_info(csymbol)
-                if cinfo:
-                    cslippage = float(cinfo.get("point") or 0.0)
-            except Exception:
-                cslippage = 0.0
-        cresult = _bt_run(cbars, code, params, strategy, with_costs=True, slippage=cslippage)
+        cslippage = cost_defaults(csymbol)["slippage_price"]
+        cresult = _bt_run(cbars, code, params, strategy, with_costs=True, slippage=cslippage, symbol=symbol)
         if cresult is None:
             continue
         cross_validation.append(
@@ -310,6 +303,7 @@ def run_validation(
         "cost_assumptions": {
             "commission_pct": 0.0002,
             "slippage": round(slippage, 6),
+            "spread_points": cost_defaults(symbol)["spread_points"],
             "execution_delay_bars": 0,
         },
         "pass_gate": pass_gate,

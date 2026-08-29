@@ -8,6 +8,7 @@ from typing import Any
 import numpy as np
 import pandas as pd
 
+from backtest_store.costs import calc_slippage, merge_costs
 from models.factor import BacktestMetrics, BacktestResult, TradeDetail
 
 DEFAULT_PARAMS = {
@@ -55,6 +56,7 @@ class Backtester:
         params: dict[str, Any] | None = None,
     ) -> BacktestResult:
         p = {**DEFAULT_PARAMS, **(params or {})}
+        p = merge_costs(p, p.get("symbol") or self.symbol)  # 成本口径中心：品种默认兜底（显式传值优先）
         df = df.copy()
         entry = entry.reindex(df.index).fillna(0.0)
         if exit_signal is not None:
@@ -99,12 +101,15 @@ class Backtester:
 
         n = len(df)
 
+        atr_mult = float(p.get("slippage_atr_mult") or 0.0)  # 可选：滑点按 ATR 比例（与固定值取大）
+
         def _open_position(i: int, side: str, direction: float) -> dict[str, Any]:
             bar_open = float(df["open"].iloc[i])
             stop_dist = atr.iloc[i] * sl_mult
             if not math.isfinite(stop_dist) or stop_dist <= 0:
                 stop_dist = bar_open * 0.01
-            entry_price = bar_open + direction * slippage
+            entry_slip = calc_slippage(slippage, atr_mult, float(atr.iloc[i]))
+            entry_price = bar_open + direction * entry_slip
             stop_price = entry_price - direction * stop_dist
             take_price = entry_price + direction * stop_dist * tp_mult
             # 点差成本（按半差价折算：买高卖低各承担一半，更贴近真实成交）
@@ -120,6 +125,7 @@ class Backtester:
                 "peak": entry_price,
                 "stop_pct": abs(stop_dist) / entry_price if entry_price else 0.01,
                 "spread_pct": spread_pct,
+                "slippage": entry_slip,  # 出场成交滑点（与入场同口径，持仓期内固定）
             }
 
         for i in range(n):
@@ -170,17 +176,17 @@ class Backtester:
 
                 if side == "long":
                     if l <= position["stop"]:
-                        exit_price, reason = position["stop"] - slippage, "止损"
+                        exit_price, reason = position["stop"] - position["slippage"], "止损"
                     elif h >= position["take"]:
-                        exit_price, reason = position["take"] - slippage, "止盈"
+                        exit_price, reason = position["take"] - position["slippage"], "止盈"
                 else:
                     if h >= position["stop"]:
-                        exit_price, reason = position["stop"] + slippage, "止损"
+                        exit_price, reason = position["stop"] + position["slippage"], "止损"
                     elif l <= position["take"]:
-                        exit_price, reason = position["take"] + slippage, "止盈"
+                        exit_price, reason = position["take"] + position["slippage"], "止盈"
 
                 if exit_price is None and exit_signal is not None and float(exit_signal.iloc[i]) != 0.0:
-                    exit_price, reason = c - direction * slippage, "出场信号"
+                    exit_price, reason = c - direction * position["slippage"], "出场信号"
                 if exit_price is None and hw_enabled:
                     atr_i = float(atr.iloc[i]) if math.isfinite(float(atr.iloc[i])) else (abs(c - o) or 0.0001)
                     r_unit = max(sl_mult * atr_i, atr_i * 0.1)
@@ -192,9 +198,9 @@ class Backtester:
                             else (h - position["peak"]) / atr_i
                         )
                         if drawdown > hw_retrace_atr:
-                            exit_price, reason = c - direction * slippage, "高水位回落"
+                            exit_price, reason = c - direction * position["slippage"], "高水位回落"
                 if exit_price is None and position["bars_held"] >= max_hold:
-                    exit_price, reason = c - direction * slippage, "超时平仓"
+                    exit_price, reason = c - direction * position["slippage"], "超时平仓"
 
                 if exit_price is not None:
                     entry_price = position["entry_price"]
@@ -231,7 +237,7 @@ class Backtester:
 
         if position is not None:
             last_index = n - 1
-            close_price = float(df["close"].iloc[last_index]) - position["direction"] * slippage
+            close_price = float(df["close"].iloc[last_index]) - position["direction"] * position["slippage"]
             entry_price = position["entry_price"]
             side_sign = position["direction"]
             gross_pnl_pct = side_sign * (close_price - entry_price) / entry_price
