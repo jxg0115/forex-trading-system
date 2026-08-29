@@ -21,6 +21,8 @@ DSH_Bridge_EA.mq5（D:\MT4BC\MQL5\Experts\，已编译 ex5）
 ## 二、文件约定（`Common\Files\dsb`：`C:\Users\xg\AppData\Roaming\MetaQuotes\Terminal\Common\Files\dsb\`）
 
 > **重要**：MT5 策略测试器（Tester 沙箱）只允许 EA 写 **Common 文件**（`FILE_COMMON` 标志）——绝对路径（如 `D:\dsh`）会被静默拒绝（EA 文件写失败且不报错，表现为"没有数据"）。桥目录统一用 `Common\Files\dsb`（EA 与系统桥共用）。
+>
+> **input 参数陷阱（已修复）**：桥目录**故意不用 input 参数**（写死宏 `#define BRIDGE_DIR "dsb\\"`）——Tester 会记住旧 input 值（如第一次跑时的 `D:\dsh\ea_bridge\`）并在重跑时覆盖代码默认值，导致路径被沙箱拒绝（Tester 日志 `FileOpen FAIL ... err=5002`）。写死宏无法被覆盖。若重跑后日志仍见 `err=5002`：确认 Tester 加载的是最新编译的 ex5（数据目录 Experts 下，时间戳应为最近）。
 
 | 文件 | 谁写 | 内容 |
 |---|---|---|
