@@ -21,7 +21,7 @@
 input int    MagicN     = 202608;
 input int    Deviations = 5;
 
-string g_configFile, g_barsFile, g_cmdsFile, g_tradesFile;
+string g_configFile, g_barsFile, g_cmdsFile, g_tradesFile, g_execFile;
 datetime g_lastBarOpen = 0;
 long g_lastCmdSeq = 0;
 datetime g_firstBarTime = 0;   // 测试段起点（OnInit 记录，转发时识别新测试重播）
@@ -33,6 +33,7 @@ int OnInit()
    g_barsFile   = BRIDGE_DIR + "bars.csv";
    g_cmdsFile   = BRIDGE_DIR + "cmds.csv";
    g_tradesFile = BRIDGE_DIR + "trades.csv";
+   g_execFile   = BRIDGE_DIR + "ea_exec.log";
 
    // 0) 读旧 config 判断是否同一测试段重启（同段则保留桥文件，避免冲掉桥进度/指令/成交）
    datetime firstBarTime = iTime(_Symbol, PERIOD_CURRENT, Bars(_Symbol, PERIOD_CURRENT) - 1);
@@ -155,6 +156,19 @@ void OnTick()
 }
 
 //+------------------------------------------------------------------+
+// 执行诊断日志：写入 dsb\ea_exec.log（Common 沙箱可写，与桥共用目录）。
+// 每个执行事件一行（含时间/seq/retcode），桥侧与人工都可直接读，不依赖 Print 可见性。
+// msg 用英文+数字，避免 ANSI 编码中文乱码。
+void LogExec(const string msg)
+{
+   int h = FileOpen(g_execFile, FILE_READ|FILE_WRITE|FILE_ANSI|FILE_COMMON);
+   if(h == INVALID_HANDLE) return;
+   FileSeek(h, 0, SEEK_END);
+   FileWriteString(h, TimeToString(TimeCurrent(), TIME_DATE|TIME_SECONDS) + " " + msg + "\n");
+   FileClose(h);
+}
+
+//+------------------------------------------------------------------+
 void ReadAndExecuteCmds()
 {
    long newSeq = 0;
@@ -175,17 +189,28 @@ void ReadAndExecuteCmds()
    if(newSeq > g_lastCmdSeq)
    {
       g_lastCmdSeq = newSeq;
-      if(cmd == "OPEN")         ExecuteOpen(a1, a2, a3, a4); // dir, sl, tp, vol
-      else if(cmd == "MODIFY_SL") ExecuteModifySL(a1);       // new_sl
-      else if(cmd == "CLOSE")   ExecuteClose();
-      else Print("[DSH_Bridge] 未知指令: ", cmd);
+      if(cmd == "OPEN")         ExecuteOpen(newSeq, a1, a2, a3, a4); // dir, sl, tp, vol
+      else if(cmd == "MODIFY_SL") ExecuteModifySL(newSeq, a1);       // new_sl
+      else if(cmd == "CLOSE")   ExecuteClose(newSeq);
+      else
+      {
+         LogExec("UNKNOWN_CMD seq=" + IntegerToString(newSeq) + " cmd=" + cmd);
+         Print("[DSH_Bridge] 未知指令: ", cmd);
+      }
    }
 }
 
 //+------------------------------------------------------------------+
-void ExecuteOpen(double dir, double sl, double tp, double vol)
+void ExecuteOpen(long seq, double dir, double sl, double tp, double vol)
 {
-   if(PositionsTotal() > 0) { Print("[DSH_Bridge] OPEN 忽略：已持仓"); return; }
+   if(PositionsTotal() > 0)
+   {
+      LogExec("OPEN seq=" + IntegerToString(seq) + " IGNORE(holding) dir=" + DoubleToString(dir,1)
+              + " vol=" + DoubleToString(vol,2) + " sl=" + DoubleToString(sl,_Digits)
+              + " tp=" + DoubleToString(tp,_Digits));
+      Print("[DSH_Bridge] OPEN 忽略：已持仓 seq=", seq);
+      return;
+   }
    double price = (dir > 0 ? SymbolInfoDouble(_Symbol, SYMBOL_ASK)
                           : SymbolInfoDouble(_Symbol, SYMBOL_BID));
    MqlTradeRequest req = {};
@@ -201,21 +226,33 @@ void ExecuteOpen(double dir, double sl, double tp, double vol)
    req.deviation = Deviations;
    req.comment   = "DSH_OPEN";
    if(OrderSend(req, res))
+   {
+      LogExec("OPEN seq=" + IntegerToString(seq) + " OK dir=" + DoubleToString(dir,1)
+              + " vol=" + DoubleToString(vol,2) + " price=" + DoubleToString(price,_Digits)
+              + " sl=" + DoubleToString(sl,_Digits) + " tp=" + DoubleToString(tp,_Digits)
+              + " deal=" + IntegerToString(res.deal) + " retcode=" + IntegerToString(res.retcode));
       Print("[DSH_Bridge] OPEN ok dir=", (int)dir, " vol=", DoubleToString(vol, 2),
             " price=", DoubleToString(price, _Digits), " sl=", DoubleToString(sl, _Digits),
             " tp=", DoubleToString(tp, _Digits), " deal=", res.deal);
+   }
    else
+   {
+      LogExec("OPEN seq=" + IntegerToString(seq) + " FAIL retcode=" + IntegerToString(res.retcode)
+              + " " + res.comment + " price=" + DoubleToString(price,_Digits));
       Print("[DSH_Bridge] OPEN FAIL retcode=", res.retcode, " ", res.comment);
+   }
 }
 
 //+------------------------------------------------------------------+
-void ExecuteModifySL(double newSl)
+void ExecuteModifySL(long seq, double newSl)
 {
+   bool found = false;
    for(int i = PositionsTotal() - 1; i >= 0; i--)
    {
       ulong t = PositionGetTicket(i);
       if(PositionGetInteger(POSITION_MAGIC) == MagicN)
       {
+         found = true;
          double tp = PositionGetDouble(POSITION_TP);
          MqlTradeRequest req = {};
          MqlTradeResult  res = {};
@@ -227,22 +264,34 @@ void ExecuteModifySL(double newSl)
          req.magic     = MagicN;
          req.deviation = Deviations;
          if(OrderSend(req, res))
+         {
+            LogExec("MODIFY_SL seq=" + IntegerToString(seq) + " OK ticket=" + IntegerToString(t)
+                    + " sl=" + DoubleToString(newSl, _Digits) + " retcode=" + IntegerToString(res.retcode));
             Print("[DSH_Bridge] MODIFY_SL ok #", t, " sl=", DoubleToString(newSl, _Digits));
+         }
          else
+         {
+            LogExec("MODIFY_SL seq=" + IntegerToString(seq) + " FAIL ticket=" + IntegerToString(t)
+                    + " retcode=" + IntegerToString(res.retcode) + " " + res.comment);
             Print("[DSH_Bridge] MODIFY_SL FAIL retcode=", res.retcode, " ", res.comment);
+         }
          break;
       }
    }
+   if(!found)
+      LogExec("MODIFY_SL seq=" + IntegerToString(seq) + " NO_POSITION sl=" + DoubleToString(newSl, _Digits));
 }
 
 //+------------------------------------------------------------------+
-void ExecuteClose()
+void ExecuteClose(long seq)
 {
+   bool found = false;
    for(int i = PositionsTotal() - 1; i >= 0; i--)
    {
       ulong t = PositionGetTicket(i);
       if(PositionGetInteger(POSITION_MAGIC) == MagicN)
       {
+         found = true;
          double price = (PositionGetInteger(POSITION_TYPE) == POSITION_TYPE_BUY)
                         ? SymbolInfoDouble(_Symbol, SYMBOL_BID)
                         : SymbolInfoDouble(_Symbol, SYMBOL_ASK);
@@ -258,13 +307,24 @@ void ExecuteClose()
          req.deviation = Deviations;
          req.comment   = "DSH_CLOSE";
          if(OrderSend(req, res))
+         {
+            LogExec("CLOSE seq=" + IntegerToString(seq) + " OK ticket=" + IntegerToString(t)
+                    + " price=" + DoubleToString(price, _Digits) + " deal=" + IntegerToString(res.deal)
+                    + " retcode=" + IntegerToString(res.retcode));
             Print("[DSH_Bridge] CLOSE ok #", t, " price=", DoubleToString(price, _Digits),
                   " deal=", res.deal);
+         }
          else
+         {
+            LogExec("CLOSE seq=" + IntegerToString(seq) + " FAIL ticket=" + IntegerToString(t)
+                    + " retcode=" + IntegerToString(res.retcode) + " " + res.comment);
             Print("[DSH_Bridge] CLOSE FAIL retcode=", res.retcode, " ", res.comment);
+         }
          break;
       }
    }
+   if(!found)
+      LogExec("CLOSE seq=" + IntegerToString(seq) + " NO_POSITION");
 }
 
 //+------------------------------------------------------------------+
@@ -289,7 +349,14 @@ void OnTradeTransaction(const MqlTradeTransaction& trans,
       FileWrite(h, kindStr, IntegerToString((long)dt), DoubleToString(price, _Digits),
                 IntegerToString((int)dir), DoubleToString(vol, 2));
       FileClose(h);
+      LogExec("DEAL " + kindStr + " price=" + DoubleToString(price, _Digits)
+              + " dir=" + IntegerToString((int)dir) + " vol=" + DoubleToString(vol, 2)
+              + " deal=" + IntegerToString((long)deal));
    }
    else
+   {
+      LogExec("DEAL_WRITE_FAIL " + kindStr + " price=" + DoubleToString(price, _Digits)
+              + " dir=" + IntegerToString((int)dir) + " err=" + IntegerToString(GetLastError()));
       Print("[DSH_Bridge] trades 回报 FAIL: ", g_tradesFile, " err=", GetLastError());
+   }
 }
