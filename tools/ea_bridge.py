@@ -75,8 +75,12 @@ def read_bars() -> pd.DataFrame:
         df = pd.read_csv(BARS_FILE)
     except Exception:
         return pd.DataFrame()  # EA 正在写（表头/半行）-> 跳过本轮
-    if df.empty or "time" not in df.columns:
+    if df.empty:
         return pd.DataFrame()
+    if "time" not in df.columns:
+        # 无表头/列名异常：取第一列作时间，其余按顺序（open,high,low,close）
+        cols = ["time", "open", "high", "low", "close"]
+        df.columns = [cols[i] if i < len(cols) else f"c{i}" for i in range(len(df.columns))]
     df["time"] = pd.to_datetime(df["time"].astype("int64"), unit="s", utc=True)
     df = df.set_index("time").sort_index()
     for c in ("open", "high", "low", "close"):
