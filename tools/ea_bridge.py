@@ -54,7 +54,7 @@ HW_RETRACE_ATR = 1.5       # 默认移动止损回撤：1.5×ATR
 VOL_FIXED = 0.01           # 风控失败时的回退仓位
 MIN_BARS = 110             # swing 100 + 延迟3 预热
 
-_API = "http://127.0.0.1:8000"
+_API = "http://127.0.0.1:8002"  # 系统正式端口（启动脚本 $env:PORT=8002）
 _FACTOR_CACHE = {"t": 0.0, "items": []}
 
 
@@ -425,7 +425,16 @@ def main() -> None:
           + (f"，本测试匹配 {len(matching_factors(cfg))} 个" if cfg else ""))
 
     seen_bars = 0
+    # seq 重启续接：从 cmds 现有最大 seq + 1（避免同段重启后 EA 侧 seq 续接错乱/重复编号）
     seq = 0
+    try:
+        rows0 = list(csv.reader(open(CMDS_FILE, encoding="utf-8", errors="replace")))
+        for r in reversed(rows0):
+            if r and r[0].isdigit():
+                seq = int(r[0])
+                break
+    except Exception:
+        pass
     open_info: dict | None = None
     trades_known = 0
     settings_t = time.time()
@@ -513,7 +522,7 @@ def main() -> None:
                             open_info["idx"] = idx
                             break
                     print(f"[ea_bridge] in confirmed -> holding entry={open_info['entry']:.3f} bar#{idx}")
-                elif idx - open_info["idx"] > 6:
+                elif idx - open_info["idx"] > 20:  # OPEN 超时放宽（EA 同段重启/慢执行时不误判 reset，避免链路反复打断）
                     # OPEN 超时未回报（EA 失败）-> 重置，避免卡死
                     open_info = None
                     print("[ea_bridge] OPEN timeout (no in) -> reset")

@@ -33,8 +33,26 @@ int OnInit()
    g_cmdsFile   = BRIDGE_DIR + "cmds.csv";
    g_tradesFile = BRIDGE_DIR + "trades.csv";
 
-   // 1) 写测试配置（Tester 注入：品种/周期/入金/杠杆/起止时间 = 最老根/最新根）
+   // 0) 读旧 config 判断是否同一测试段重启（同段则保留桥文件，避免冲掉桥进度/指令/成交）
    datetime firstBarTime = iTime(_Symbol, PERIOD_CURRENT, Bars(_Symbol, PERIOD_CURRENT) - 1);
+   bool sameSegment = false;
+   int hc = FileOpen(g_configFile, FILE_READ|FILE_CSV|FILE_ANSI|FILE_COMMON, ',');
+   if(hc != INVALID_HANDLE)
+   {
+      if(!FileIsEnding(hc))
+      {
+         FileReadString(hc);                 // symbol
+         FileReadString(hc);                 // period
+         FileReadString(hc);                 // balance
+         FileReadString(hc);                 // leverage
+         string sStart = FileReadString(hc); // start（最老根时间）
+         if(sStart != "" && StringToInteger(sStart) == (long)firstBarTime)
+            sameSegment = true;
+      }
+      FileClose(hc);
+   }
+
+   // 1) 写测试配置（Tester 注入：品种/周期/入金/杠杆/起止时间 = 最老根/最新根）
    datetime lastBarTime  = iTime(_Symbol, PERIOD_CURRENT, 0);
    int h = FileOpen(g_configFile, FILE_WRITE|FILE_CSV|FILE_ANSI|FILE_COMMON, ',');
    if(h != INVALID_HANDLE)
@@ -50,16 +68,39 @@ int OnInit()
    else
       Print("[DSH_Bridge] FileOpen FAIL: ", g_configFile, " err=", GetLastError());
 
-   // 2) 清桥文件表头
-   h = FileOpen(g_barsFile, FILE_WRITE|FILE_CSV|FILE_ANSI|FILE_COMMON, ',');
-   if(h != INVALID_HANDLE) { FileWrite(h, "time,open,high,low,close"); FileClose(h); }
-   else Print("[DSH_Bridge] FileOpen FAIL: ", g_barsFile, " err=", GetLastError());
-   h = FileOpen(g_cmdsFile, FILE_WRITE|FILE_CSV|FILE_ANSI|FILE_COMMON, ',');
-   if(h != INVALID_HANDLE) { FileWrite(h, "seq,cmd,arg1,arg2,arg3,arg4"); FileClose(h); }
-   else Print("[DSH_Bridge] FileOpen FAIL: ", g_cmdsFile, " err=", GetLastError());
-   h = FileOpen(g_tradesFile, FILE_WRITE|FILE_CSV|FILE_ANSI|FILE_COMMON, ',');
-   if(h != INVALID_HANDLE) { FileWrite(h, "kind,time,price,dir,vol"); FileClose(h); }
-   else Print("[DSH_Bridge] FileOpen FAIL: ", g_tradesFile, " err=", GetLastError());
+   // 2) 清桥文件表头（仅新测试段；同段重启保留——避免冲掉桥正在推进的指令/成交）
+   if(!sameSegment)
+   {
+      h = FileOpen(g_barsFile, FILE_WRITE|FILE_CSV|FILE_ANSI|FILE_COMMON, ',');
+      if(h != INVALID_HANDLE) { FileWrite(h, "time,open,high,low,close"); FileClose(h); }
+      else Print("[DSH_Bridge] FileOpen FAIL: ", g_barsFile, " err=", GetLastError());
+      h = FileOpen(g_cmdsFile, FILE_WRITE|FILE_CSV|FILE_ANSI|FILE_COMMON, ',');
+      if(h != INVALID_HANDLE) { FileWrite(h, "seq,cmd,arg1,arg2,arg3,arg4"); FileClose(h); }
+      else Print("[DSH_Bridge] FileOpen FAIL: ", g_cmdsFile, " err=", GetLastError());
+      h = FileOpen(g_tradesFile, FILE_WRITE|FILE_CSV|FILE_ANSI|FILE_COMMON, ',');
+      if(h != INVALID_HANDLE) { FileWrite(h, "kind,time,price,dir,vol"); FileClose(h); }
+      else Print("[DSH_Bridge] FileOpen FAIL: ", g_tradesFile, " err=", GetLastError());
+   }
+   else
+      Print("[DSH_Bridge] 同一测试段重启——保留桥文件");
+
+   // 2.5) g_lastCmdSeq 从 cmds 现有最大 seq 续接（同段重启不重复执行历史指令；新段只剩表头 seq=0）
+   int h2 = FileOpen(g_cmdsFile, FILE_READ|FILE_CSV|FILE_ANSI|FILE_COMMON, ',');
+   if(h2 != INVALID_HANDLE)
+   {
+      long maxSeq = 0;
+      while(!FileIsEnding(h2))
+      {
+         long s2 = (long)FileReadNumber(h2);
+         FileReadString(h2);
+         FileReadNumber(h2); FileReadNumber(h2); FileReadNumber(h2); FileReadNumber(h2);
+         if(s2 > maxSeq) maxSeq = s2;
+      }
+      FileClose(h2);
+      g_lastCmdSeq = maxSeq;
+      if(maxSeq > 0)
+         Print("[DSH_Bridge] 续接指令 seq=", maxSeq);
+   }
 
    Print("[DSH_Bridge] init | sym=", _Symbol, " P", PERIOD_CURRENT,
          " bal=", DoubleToString(AccountInfoDouble(ACCOUNT_BALANCE), 2),
