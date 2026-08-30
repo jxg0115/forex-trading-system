@@ -98,6 +98,38 @@ def _archive_segment(bars_raw: str, cmds_raw: str, trades_raw: str, stats_raw: s
         return ""
 
 
+# 混段防呆（MIXED-SEGMENT）：
+# EA "同段重启保留"误判（旧 config start==缓存最老根恒定）时，新测试轮不清空 bars，
+# 而是把重放数据追加到旧段尾部 -> 原始文件出现"时间倒退"（回归点）。
+# 桥 detect 回归点后：归档当前段、跳过回归点前的旧段行、重置段状态（自愈，无需手动清理）。
+_MIX_SKIP = 0    # 跳过的旧段行数（read_bars 丢弃）
+_MIX_MARK = -1   # 已处理的回归点数据行号（-1=无；变化才触发归档/重建，防止重复归档）
+
+
+def _find_mix_mark(raw: str) -> int:
+    """原始 bars 文本中最后一个"时间倒退行"的数据位置（0-based），无回归返 -1。
+
+    时间倒退 = 混段特征（旧段尾之后追加了更早时间的重放数据）。
+    返回的位置即"新段（回归后）起点"，跳过它之前的行即得到干净新段。
+    """
+    mark = -1
+    prev = None
+    i = 0
+    for line in raw.splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            t = int(line.split(",")[0])
+        except Exception:
+            continue  # 表头/半行
+        if prev is not None and t < prev:
+            mark = i
+        prev = t
+        i += 1
+    return mark
+
+
 def read_bars() -> pd.DataFrame:
     if not os.path.exists(BARS_FILE):
         return pd.DataFrame()
@@ -105,6 +137,9 @@ def read_bars() -> pd.DataFrame:
         df = pd.read_csv(BARS_FILE)
     except Exception:
         return pd.DataFrame()  # EA 正在写（表头/半行）-> 跳过本轮
+    if _MIX_SKIP > 0:
+        # 混段：丢弃回归点前的旧段行（文件行序=追加序），仅保留回归后新段再排序
+        df = df.iloc[_MIX_SKIP:]
     if df.empty:
         return pd.DataFrame()
     if "time" not in df.columns:
@@ -439,6 +474,7 @@ def write_stats(trades: list[dict]) -> dict:
 
 
 def main() -> None:
+    global _MIX_SKIP, _MIX_MARK  # 混段防呆状态（模块级，主循环内写入）
     os.makedirs(BRIDGE_DIR, exist_ok=True)
     if not os.path.exists(CMDS_FILE):
         with open(CMDS_FILE, "w", newline="") as f:
@@ -512,6 +548,25 @@ def main() -> None:
         n_in = sum(1 for r in rows if r["kind"] == "in")
         n_out = sum(1 for r in rows if r["kind"] == "out")
         n_open = max(0, n_in - n_out)
+
+        # 混段防呆：检测 bars 原始序的时间倒退（EA 同段误判保留旧文件 + 重放追加）。
+        # 回归点变化才动作（归档 + 跳过旧段 + 重置段状态）；回归点不变则静默继续（用回归后数据）。
+        mix = _find_mix_mark(cur_raw["bars"])
+        if mix != _MIX_MARK:
+            _MIX_MARK = mix
+            if mix >= 0:
+                if seen_bars > 0 and prev_raw["bars"]:
+                    _archive_segment(prev_raw["bars"], prev_raw["cmds"],
+                                     prev_raw["trades"], prev_raw["stats"])
+                _MIX_SKIP = mix
+                prev_raw = cur_raw
+                seen_bars = 0
+                last_time = 0
+                print(f"[ea_bridge] 混段检测：跳过旧段 {mix} 行，段状态已重置，从回归点后继续")
+            else:
+                # 回归消失（文件被清空/新段干净）：复位（下一轮以新段正常处理）
+                _MIX_SKIP = 0
+            df = pd.DataFrame()  # 变化轮以旧数据构造的 df 弃用：本轮跳过决策，下一轮用新 skip 重读
 
         if len(df) < seen_bars:  # 文件被清空（新测试段）——归档上一段，再重置进度与时间去重
             if seen_bars > 0 and prev_raw["bars"]:
