@@ -1012,6 +1012,20 @@ export const api = {
       body: JSON.stringify(payload),
     });
   },
+  marketStatus(symbol = "XAUUSD", timeframe = "M15"): Promise<{
+    symbol: string;
+    timeframe: string;
+    market: {
+      is_open: boolean;
+      session: "open" | "closed";
+      now_ts: number;
+      next_open_ts: number;
+      next_close_ts: number | null;
+      weekday: number;
+    };
+  }> {
+    return request(`/api/market/status?symbol=${encodeURIComponent(symbol)}&timeframe=${encodeURIComponent(timeframe)}`);
+  },
   bridgeStatus(): Promise<{ running: boolean; status: Record<string, unknown>; settings: BridgeSettings; bridge_dir: string; fresh_s: number }> {
     return request("/api/bridge/status");
   },

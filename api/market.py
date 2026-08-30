@@ -5,6 +5,7 @@ from __future__ import annotations
 from fastapi import APIRouter, Depends, HTTPException
 
 from api.deps import get_app_state
+from api.market_sessions import market_state
 
 router = APIRouter(prefix="/api/market", tags=["行情"])
 
@@ -31,6 +32,12 @@ async def get_snapshot(symbol: str = "EURUSD", timeframe: str = "M15", state=Dep
         return state.market.snapshot(symbol, timeframe).model_dump()
     except ValueError as exc:
         raise HTTPException(status_code=503, detail=str(exc)) from exc
+
+
+@router.get("/status")
+async def get_market_status(symbol: str = "XAUUSD", timeframe: str = "M15"):
+    # 纯时间需求：市场状态/开市·收市倒计时（不依赖行情，MT5 离线也能用）
+    return {"symbol": symbol, "timeframe": timeframe, "market": market_state()}
 
 
 @router.get("/analysis")
