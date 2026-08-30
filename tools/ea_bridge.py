@@ -26,6 +26,7 @@ import os
 import sys
 import time
 import urllib.request
+from datetime import datetime
 
 import pandas as pd
 
@@ -66,6 +67,35 @@ def _atr(df: pd.DataFrame, period: int) -> pd.Series:
         axis=1,
     ).max(axis=1)
     return tr.rolling(period).mean()
+
+
+def _read_raw(path: str) -> str:
+    """读文件原文（归档快照用）；不存在/读失败返回空串。"""
+    try:
+        with open(path, "r", encoding="utf-8", errors="replace") as f:
+            return f.read()
+    except Exception:
+        return ""
+
+
+ARCHIVE_DIR = os.path.join(BRIDGE_DIR, "archive")
+
+
+def _archive_segment(bars_raw: str, cmds_raw: str, trades_raw: str, stats_raw: str) -> str:
+    """把上一段测试数据归档到 archive/<时间戳>/（每次测试独立可回溯，不混在活跃文件）。"""
+    try:
+        ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+        d = os.path.join(ARCHIVE_DIR, ts)
+        os.makedirs(d, exist_ok=True)
+        if bars_raw:  open(os.path.join(d, "bars.csv"), "w", encoding="utf-8").write(bars_raw)
+        if cmds_raw:  open(os.path.join(d, "cmds.csv"), "w", encoding="utf-8").write(cmds_raw)
+        if trades_raw: open(os.path.join(d, "trades.csv"), "w", encoding="utf-8").write(trades_raw)
+        if stats_raw: open(os.path.join(d, "stats.txt"), "w", encoding="utf-8").write(stats_raw)
+        print(f"[ea_bridge] 已归档上一测试段 -> {d}")
+        return d
+    except Exception as e:
+        print(f"[ea_bridge] 归档失败: {e}")
+        return ""
 
 
 def read_bars() -> pd.DataFrame:
@@ -430,6 +460,8 @@ def main() -> None:
 
     seen_bars = 0
     last_time = 0  # 时间单调去重：同段重播时旧 bar 重复 append，只处理时间递增的新根
+    # 归档留底：每轮缓存四文件原文，检测到文件被清空（新测试段）时归档上一段
+    prev_raw = {"bars": "", "cmds": "", "trades": "", "stats": ""}
     # seq 重启续接：从 cmds 现有最大 seq + 1（避免同段重启后 EA 侧 seq 续接错乱/重复编号）
     seq = 0
     try:
@@ -468,15 +500,28 @@ def main() -> None:
               f"bar#{open_info['idx']}（移动止损/时间停自动接管）")
 
     while True:
+        # 每轮缓存四个文件原文（新测试段清空文件前的完整段快照，归档用）
+        cur_raw = {
+            "bars": _read_raw(BARS_FILE),
+            "cmds": _read_raw(CMDS_FILE),
+            "trades": _read_raw(TRADES_FILE),
+            "stats": _read_raw(STATS_FILE),
+        }
         df = read_bars()
         rows = read_trades()
         n_in = sum(1 for r in rows if r["kind"] == "in")
         n_out = sum(1 for r in rows if r["kind"] == "out")
         n_open = max(0, n_in - n_out)
 
-        if len(df) < seen_bars:  # 文件被清空（新测试段）——重置进度与时间去重
+        if len(df) < seen_bars:  # 文件被清空（新测试段）——归档上一段，再重置进度与时间去重
+            if seen_bars > 0 and prev_raw["bars"]:
+                _archive_segment(prev_raw["bars"], prev_raw["cmds"],
+                                 prev_raw["trades"], prev_raw["stats"])
+            prev_raw = cur_raw
             seen_bars = 0
             last_time = 0
+        else:
+            prev_raw = cur_raw  # 同段内每轮滚动留底
         cur_t = int(df.index[-1].timestamp()) if len(df) else 0  # time 已 set_index，取索引
         if len(df) > seen_bars and len(df) >= MIN_BARS and cur_t > last_time:
             seen_bars = len(df)
