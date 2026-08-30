@@ -213,6 +213,88 @@ def risk_lot(balance: float, sl_dist: float, cur_price: float) -> float:
     return VOL_FIXED
 
 
+# ================= 桥状态 / 功能开关（系统板面控制） =================
+
+SETTINGS_FILE = os.path.join(BRIDGE_DIR, "bridge_settings.json")
+STATUS_FILE = os.path.join(BRIDGE_DIR, "bridge_status.json")
+
+# 功能参与默认（系统板面可勾选）：factors/sltp/smart_stop/events/risk 参与；patterns/ai 默认关
+DEFAULT_SETTINGS = {
+    "factors": True, "sltp": True, "smart_stop": True,
+    "events": True, "risk": True, "patterns": False, "ai": False,
+}
+SETTINGS = dict(DEFAULT_SETTINGS)
+PROGRESS_FALLBACK_DAYS = 30  # 无 end 时进度兜底（诚实标注近似）
+
+
+def load_settings() -> None:
+    """读系统板面保存的功能勾选（bridge_settings.json）；无文件用默认。"""
+    global SETTINGS
+    try:
+        if os.path.exists(SETTINGS_FILE):
+            with open(SETTINGS_FILE, "r", encoding="utf-8") as f:
+                data = json.load(f)
+            if isinstance(data, dict):
+                for k in DEFAULT_SETTINGS:
+                    if isinstance(data.get(k), bool):
+                        SETTINGS[k] = data[k]
+    except Exception:
+        pass
+
+
+def _progress_pct(cfg: dict, df) -> float:
+    """进度 = 当前测试到的时间 / 整体时间。起点用 bars 首根（真实回放起点，比 bridge_config 可靠）；
+    end 用 EA 写入的 end（新 EA 有），无则兜底近似 start+30 天（诚实标注）。"""
+    try:
+        if len(df) == 0:
+            return 0.0
+        start = int(df.index[0].timestamp())
+        end = int(cfg.get("end") or 0)
+        if end <= start:
+            end = start + PROGRESS_FALLBACK_DAYS * 86400  # EA 未写 end -> 兜底（诚实近似）
+        cur = int(df.index[-1].timestamp())
+        pct = max(0.0, min(100.0, (cur - start) / (end - start) * 100.0))
+        return round(pct, 1)
+    except Exception:
+        return 0.0
+
+
+def _period_label(df) -> str:
+    """从 bars 前两根间隔推断周期（EA 的 period 字段写 0 是已知小瑕疵，不影响决策）。"""
+    try:
+        if len(df) >= 2:
+            sec = int(df.index[1].timestamp() - df.index[0].timestamp())
+            return {60: "M1", 300: "M5", 900: "M15", 1800: "M30", 3600: "H1",
+                    14400: "H4", 86400: "D1"}.get(sec, f"{sec}s")
+    except Exception:
+        pass
+    return ""
+
+
+def write_status(cfg: dict, df, seq: int, open_info, n_trades: int, cum_pct: float, source: str) -> None:
+    """写 bridge_status.json（系统板面实时显示：运行/品种/周期/进度/功能参与/最近动作）。"""
+    try:
+        status = {
+            "running": True,
+            "ts": int(time.time()),
+            "pid": os.getpid(),
+            "symbol": cfg.get("symbol", ""),
+            "period": _period_label(df) or cfg.get("period", ""),
+            "bars": int(len(df)) if len(df) else 0,
+            "progress_pct": _progress_pct(cfg, df),
+            "current_time": df.index[-1].strftime("%Y-%m-%d %H:%M") + " UTC" if len(df) else "",
+            "modules": dict(SETTINGS),
+            "n_trades": n_trades,
+            "cum_pct": round(cum_pct, 3),
+            "source": source,
+            "holding": bool(open_info),
+        }
+        with open(STATUS_FILE, "w", encoding="utf-8") as f:
+            json.dump(status, f, ensure_ascii=False)
+    except Exception:
+        pass
+
+
 # ================= 桥通道 =================
 
 def read_config() -> dict:
@@ -220,9 +302,11 @@ def read_config() -> dict:
     if os.path.exists(CONFIG_FILE):
         try:
             rows = list(csv.reader(open(CONFIG_FILE, encoding="utf-8", errors="replace")))
-            if len(rows) >= 2:
-                r = rows[1]
-                cfg = {"symbol": r[0], "period": r[1], "balance": r[2], "leverage": r[3], "start": r[4]}
+            if len(rows) >= 1:
+                r = rows[-1]  # 兼容：EA 单行数据（无表头）或 表头+数据 两行
+                if r and r[0] and r[0] != "symbol":
+                    cfg = {"symbol": r[0], "period": r[1], "balance": r[2], "leverage": r[3],
+                           "start": r[4], "end": r[5] if len(r) > 5 else ""}
         except Exception:
             pass
     return cfg
@@ -329,7 +413,9 @@ def main() -> None:
         with open(TRADES_FILE, "w", newline="") as f:
             csv.writer(f).writerow(["kind", "time", "price", "dir", "vol"])
 
-    print("[ea_bridge] system-side ready | Tester 决策调度器 v2（因子库+SLTP配置+事件+风控 参与）")
+    load_settings()
+    on = [k for k, v in SETTINGS.items() if v]
+    print("[ea_bridge] system-side ready | Tester 决策调度器 v2（功能参与：" + ", ".join(on) + "）")
     cfg = read_config()
     if cfg:
         print(f"[ea_bridge] test context: symbol={cfg.get('symbol')} period={cfg.get('period')} "
@@ -342,6 +428,7 @@ def main() -> None:
     seq = 0
     open_info: dict | None = None
     trades_known = 0
+    settings_t = time.time()
 
     # 重启恢复：若已有持仓（trades 有 in 未配对），重建 open_info（近似）——重启不丢持仓。
     rows0 = read_trades()
@@ -384,17 +471,24 @@ def main() -> None:
 
             if open_info is None:
                 if n_open == 0:
-                    d0, src, fact = factor_decision(df, cfg, idx)
+                    if SETTINGS["factors"]:
+                        d0, src, fact = factor_decision(df, cfg, idx)
+                    else:
+                        sig = candidate_entry(df)
+                        d0 = float(sig.iloc[idx]) if len(sig) else 0.0
+                        src = "candidate"
+                        fact = None
                     if d0 != 0.0:
-                        if event_blocked(df, idx):
+                        if SETTINGS["events"] and event_blocked(df, idx):
                             print(f"[ea_bridge] 事件窗口，跳过信号（{src}）bar#{idx}")
                         else:
-                            sc = sltp_from_factor(fact)
+                            sc = sltp_from_factor(fact) if SETTINGS["sltp"] else sltp_from_factor(None)
                             stop = atr * sc["stop_atr"]
                             d = 1 if d0 > 0 else -1
                             sl = round(close - d * stop, 5)
                             tp = round(close + d * stop * sc["take_atr"] / sc["stop_atr"], 5)
-                            vol = risk_lot(float(cfg.get("balance") or 10000), stop, close)
+                            vol = (risk_lot(float(cfg.get("balance") or 10000), stop, close)
+                                   if SETTINGS["risk"] else VOL_FIXED)
                             seq += 1
                             append_cmd(seq, "OPEN", d, sl, tp, vol)
                             open_info = {
@@ -429,26 +523,27 @@ def main() -> None:
                 open_info = None
 
             else:
-                # holding：移动止损（因子 trailing 参数）+ 时间停（决策在系统）
+                # holding：移动止损（因子 trailing 参数，smart_stop 勾选时开启）+ 时间停（决策在系统）
                 oi = open_info
                 sl = oi["sl"]
                 r_atr = 0.0
-                if oi["dir"] > 0:
-                    extreme = max(oi["extreme"], float(df["high"].iloc[idx]))
-                    r_atr = (extreme - oi["entry"]) / atr
-                    if r_atr >= oi["tr_act_atr"]:
-                        new_sl = max(oi["sl"], round(extreme - atr * oi["tr_stop_atr"], 5))
-                        if new_sl > oi["sl_sent"]:
-                            sl = new_sl
-                else:
-                    extreme = min(oi["extreme"], float(df["low"].iloc[idx]))
-                    r_atr = (oi["entry"] - extreme) / atr
-                    if r_atr >= oi["tr_act_atr"]:
-                        new_sl = min(oi["sl"], round(extreme + atr * oi["tr_stop_atr"], 5))
-                        if new_sl < oi["sl_sent"]:
-                            sl = new_sl
-                open_info["extreme"] = extreme
-                open_info["sl"] = sl
+                if SETTINGS["smart_stop"]:
+                    if oi["dir"] > 0:
+                        extreme = max(oi["extreme"], float(df["high"].iloc[idx]))
+                        r_atr = (extreme - oi["entry"]) / atr
+                        if r_atr >= oi["tr_act_atr"]:
+                            new_sl = max(oi["sl"], round(extreme - atr * oi["tr_stop_atr"], 5))
+                            if new_sl > oi["sl_sent"]:
+                                sl = new_sl
+                    else:
+                        extreme = min(oi["extreme"], float(df["low"].iloc[idx]))
+                        r_atr = (oi["entry"] - extreme) / atr
+                        if r_atr >= oi["tr_act_atr"]:
+                            new_sl = min(oi["sl"], round(extreme + atr * oi["tr_stop_atr"], 5))
+                            if new_sl < oi["sl_sent"]:
+                                sl = new_sl
+                    open_info["extreme"] = extreme
+                    open_info["sl"] = sl
 
                 if sl != oi["sl_sent"]:
                     seq += 1
@@ -470,6 +565,11 @@ def main() -> None:
             if st["n"] > 0:
                 print(f"[ea_bridge] stats updated: n={st['n']} cum={st['eq']:+.3f}% "
                       f"(see {STATS_FILE} / {EQUITY_FILE})")
+
+        # 状态上报（系统板面实时显示：运行/品种/周期/进度/功能参与/最近来源）
+        write_status(cfg, df, seq, open_info, len(trades),
+                     sum(pnl_pct(t) for t in trades),
+                     open_info.get("src", "idle") if open_info else "idle")
 
         time.sleep(POLL_S)
 

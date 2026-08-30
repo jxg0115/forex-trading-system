@@ -52,10 +52,10 @@ def resolve_port(preferred: int) -> int:
 
 
 if __name__ == "__main__":
-    # 触发 uvicorn reload 加载最新代码
+    # 关 reload：高频文件变化触发重复重载易崩（稳定性优先；改代码后手动重启）
     uvicorn.run(
         "main:app",
         host=settings.host,
         port=resolve_port(settings.port),
-        reload=settings.debug,
+        reload=False,
     )

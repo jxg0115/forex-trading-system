@@ -37,6 +37,7 @@ import { FactorEditModal } from "./components/FactorEditModal";
 import { Mt5Panel } from "./components/Mt5Panel";
 import { OrderLogPanel } from "./components/OrderLogPanel";
 import { FactorMiningPanel } from "./components/FactorMiningPanel";
+import { BridgePanel } from "./components/BridgePanel";
 import { SltpPolicyPanel } from "./components/SltpPolicyPanel";
 import { SymbolSearchSelect } from "./components/SymbolSearchSelect";
 import { api, type AiConfig, type AiStatus, type Alert, type BacktestResult, type Bar, type Factor, type FactorDraft, type FactorPayload, type IndicatorData, type LearnTradeResult, type MarkerPoint, type MatcherCandidate, type Mt5Tick, type OptimizeResult, type Selection, type SystemState, type TradeStatsResult } from "./api";
@@ -56,7 +57,7 @@ interface ScanResult {
   scanned: number;
 }
 
-type MainTab = "factors" | "trading" | "replay" | "ai" | "sltp" | "mining";
+type MainTab = "factors" | "trading" | "replay" | "ai" | "sltp" | "mining" | "bridge";
 type SubTab = "mark" | "backtest" | "manage" | "signals" | "mt5" | "replay" | "orders" | "stats" | "optimize" | "sltp";
 
 const TIMEFRAMES = ["M1", "M5", "M15", "M30", "H1", "H4", "D1"];
@@ -2161,10 +2162,12 @@ export default function App() {
             <button className={`tab ${tab === "trading" ? "active" : ""}`} onClick={() => { setTab("trading"); setSubTab("signals"); }}><Activity size={14} /> 交易中心</button>
             <button className={`tab ${tab === "replay" ? "active" : ""}`} onClick={() => { setTab("replay"); setSubTab("replay"); }}><FileText size={14} /> 复盘与日志</button>
             <button className={`tab ${tab === "ai" ? "active" : ""}`} onClick={() => setTab("ai")}><Cpu size={14} /> AI 管理</button>
+            <button className={`tab ${tab === "bridge" ? "active" : ""}`} onClick={() => setTab("bridge")}><Cable size={14} /> MT5 测试器桥</button>
           </div>
 
           <div className="panel-body">
             {tab === "mining" && <FactorMiningPanel onNotify={notify} />}
+            {tab === "bridge" && <BridgePanel onNotify={notify} />}
             {tab === "factors" && (
               <div className="sub-tabs">
                 <button className={`sub-tab ${subTab === "mark" ? "active" : ""}`} onClick={() => setSubTab("mark")}>形态标注</button>
