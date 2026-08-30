@@ -425,6 +425,7 @@ def main() -> None:
           + (f"，本测试匹配 {len(matching_factors(cfg))} 个" if cfg else ""))
 
     seen_bars = 0
+    last_time = 0  # 时间单调去重：同段重播时旧 bar 重复 append，只处理时间递增的新根
     # seq 重启续接：从 cmds 现有最大 seq + 1（避免同段重启后 EA 侧 seq 续接错乱/重复编号）
     seq = 0
     try:
@@ -469,8 +470,13 @@ def main() -> None:
         n_out = sum(1 for r in rows if r["kind"] == "out")
         n_open = max(0, n_in - n_out)
 
-        if len(df) > seen_bars and len(df) >= MIN_BARS:
+        if len(df) < seen_bars:  # 文件被清空（新测试段）——重置进度与时间去重
+            seen_bars = 0
+            last_time = 0
+        cur_t = int(df["time"].iloc[-1]) if len(df) else 0
+        if len(df) > seen_bars and len(df) >= MIN_BARS and cur_t > last_time:
             seen_bars = len(df)
+            last_time = cur_t
             idx = len(df) - 1
             close = float(df["close"].iloc[idx])
             atr_s = _atr(df, ATR_PERIOD)
