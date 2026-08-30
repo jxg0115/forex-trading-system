@@ -33,8 +33,9 @@ int OnInit()
    g_cmdsFile   = BRIDGE_DIR + "cmds.csv";
    g_tradesFile = BRIDGE_DIR + "trades.csv";
 
-   // 1) 写测试配置（Tester 注入：品种/周期/入金/杠杆/起始时间 = 最老根）
+   // 1) 写测试配置（Tester 注入：品种/周期/入金/杠杆/起止时间 = 最老根/最新根）
    datetime firstBarTime = iTime(_Symbol, PERIOD_CURRENT, Bars(_Symbol, PERIOD_CURRENT) - 1);
+   datetime lastBarTime  = iTime(_Symbol, PERIOD_CURRENT, 0);
    int h = FileOpen(g_configFile, FILE_WRITE|FILE_CSV|FILE_ANSI|FILE_COMMON, ',');
    if(h != INVALID_HANDLE)
    {
@@ -42,7 +43,8 @@ int OnInit()
                 IntegerToString(PERIOD_CURRENT),
                 DoubleToString(AccountInfoDouble(ACCOUNT_BALANCE), 2),
                 IntegerToString((int)AccountInfoInteger(ACCOUNT_LEVERAGE)),
-                IntegerToString((long)firstBarTime));
+                IntegerToString((long)firstBarTime),
+                IntegerToString((long)lastBarTime));
       FileClose(h);
    }
    else

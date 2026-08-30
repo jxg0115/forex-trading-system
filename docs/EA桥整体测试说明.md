@@ -71,6 +71,15 @@ Tester 报告（你看到）与 系统统计 与 系统历史回测（rolling_re
 - EA 只转发**已收盘** bar、只执行系统指令——无未来函数、无 EA 自主决策
 - 桥链路已空跑验证（OPEN→in 回报→移动止损提损 9 次→时间停 CLOSE→out→统计 n=1 累计 +12.8%）
 
+## 六·五、桥控制板块（系统正式功能）
+
+- **面板**：系统 UI（http://127.0.0.1:8000）新增「MT5 测试器桥」tab ——启动/停止桥、功能参与勾选、实时状态表、进度条
+- **API**：`/api/bridge/status`（实时状态：品种/周期/bars/进度/心跳/功能参与/笔数/累计）、`/api/bridge/start`、`/api/bridge/stop`（按 pid 精确控制，绝不误杀其他进程）、`/api/bridge/config`（功能勾选读写）
+- **功能勾选**：因子库匹配 / SLTP 止损止盈 / 智能止损 / 事件过滤 / 风控 可勾可关（默认全开；形态、AI 默认关）——保存后桥 ≤10s 实时生效
+- **进度**：起止用 bars 首根（真实回放起点）+ EA 写入的 end（新 EA Onlnit 写「测试段最新根时间」）；EA 未写 end 时按 30 天兜底近似（诚实标注）
+- **周期显示**：从 bars 间隔推断（M1…D1）；EA 的 period 字段写 0 是已知小瑕疵（不影响决策）
+- **桥目录**：`Common\Files\dsb`（与 EA 共用，Tester 沙箱唯一可写路径）
+
 ## 七、文件位置
 
 - EA（源 + 编译 ex5）：`C:\Users\xg\AppData\Roaming\MetaQuotes\Terminal\AD19930FB9E178C6A37EC8F2329F4307\MQL5\Experts\DSH_Bridge_EA.mq5`（源副本 `D:\MT4BC\MQL5\Experts\`；MetaEditor64 编译）
