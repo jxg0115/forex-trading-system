@@ -477,7 +477,7 @@ def main() -> None:
         if len(df) < seen_bars:  # 文件被清空（新测试段）——重置进度与时间去重
             seen_bars = 0
             last_time = 0
-        cur_t = int(df["time"].iloc[-1]) if len(df) else 0
+        cur_t = int(df.index[-1].timestamp()) if len(df) else 0  # time 已 set_index，取索引
         if len(df) > seen_bars and len(df) >= MIN_BARS and cur_t > last_time:
             seen_bars = len(df)
             last_time = cur_t
