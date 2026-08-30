@@ -24,6 +24,7 @@ input int    Deviations = 5;
 string g_configFile, g_barsFile, g_cmdsFile, g_tradesFile;
 datetime g_lastBarOpen = 0;
 long g_lastCmdSeq = 0;
+datetime g_firstBarTime = 0;   // 测试段起点（OnInit 记录，转发时识别新测试重播）
 
 //+------------------------------------------------------------------+
 int OnInit()
@@ -35,6 +36,7 @@ int OnInit()
 
    // 0) 读旧 config 判断是否同一测试段重启（同段则保留桥文件，避免冲掉桥进度/指令/成交）
    datetime firstBarTime = iTime(_Symbol, PERIOD_CURRENT, Bars(_Symbol, PERIOD_CURRENT) - 1);
+   g_firstBarTime = firstBarTime;
    bool sameSegment = false;
    int hc = FileOpen(g_configFile, FILE_READ|FILE_CSV|FILE_ANSI|FILE_COMMON, ',');
    if(hc != INVALID_HANDLE)
@@ -124,6 +126,17 @@ void OnTick()
       double cl = iClose(_Symbol, PERIOD_CURRENT, 1);
       if(bt > 0)
       {
+         // 回到测试段起点 = 新测试/重播 -> 清空三文件重写表头（每次测试数据完全独立，不混合）
+         if(bt == g_firstBarTime)
+         {
+            int hw = FileOpen(g_barsFile, FILE_WRITE|FILE_CSV|FILE_ANSI|FILE_COMMON, ',');
+            if(hw != INVALID_HANDLE) { FileWrite(hw, "time,open,high,low,close"); FileClose(hw); }
+            hw = FileOpen(g_cmdsFile, FILE_WRITE|FILE_CSV|FILE_ANSI|FILE_COMMON, ',');
+            if(hw != INVALID_HANDLE) { FileWrite(hw, "seq,cmd,arg1,arg2,arg3,arg4"); FileClose(hw); }
+            hw = FileOpen(g_tradesFile, FILE_WRITE|FILE_CSV|FILE_ANSI|FILE_COMMON, ',');
+            if(hw != INVALID_HANDLE) { FileWrite(hw, "kind,time,price,dir,vol"); FileClose(hw); }
+            Print("[DSH_Bridge] 回到段起点——清空三文件（新测试数据独立）");
+         }
          int hf = FileOpen(g_barsFile, FILE_READ|FILE_WRITE|FILE_CSV|FILE_ANSI|FILE_COMMON, ',');
          if(hf != INVALID_HANDLE)
          {
