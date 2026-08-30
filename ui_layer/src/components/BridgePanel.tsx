@@ -105,7 +105,7 @@ export function BridgePanel({ onNotify }: { onNotify: (type: "success" | "error"
       </div>
 
       <div className="form-row" style={{ flexWrap: "wrap", gap: 8 }}>
-        <button className="btn primary" onClick={start} disabled={busy || running === true}>
+        <button className="btn primary" onClick={start} disabled={busy}>
           <Power size={14} /> 启动桥
         </button>
         <button className="btn danger" onClick={stop} disabled={busy || !running}>

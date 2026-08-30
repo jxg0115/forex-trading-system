@@ -74,9 +74,11 @@ def status() -> dict:
 
 
 def _pid_alive(pid) -> bool:
+    """Windows: os.kill(pid, 0) 不可靠（实测误判死）；用 tasklist 判定进程存活。"""
     try:
-        os.kill(int(pid), 0)
-        return True
+        out = subprocess.run(["tasklist", "/FI", f"PID eq {int(pid)}", "/NH"],
+                             capture_output=True, text=True, timeout=10)
+        return str(int(pid)) in out.stdout
     except Exception:
         return False
 
@@ -105,21 +107,23 @@ def start() -> dict:
 def stop() -> dict:
     st = _read_status()
     pid = st.get("pid")
+    stopped = None
     if pid and _pid_alive(pid):
+        # Windows 强杀：os.kill(SIGTERM) 对 Popen 子进程不可靠（实测杀不死），用 taskkill /F
         try:
-            import signal
-            os.kill(int(pid), signal.SIGTERM)
+            subprocess.run(["taskkill", "/PID", str(int(pid)), "/F"],
+                           capture_output=True, timeout=15)
+            stopped = int(pid)
         except Exception:
-            try:
-                os.kill(int(pid), signal.SIGKILL if hasattr(signal, "SIGKILL") else 9)
-            except Exception:
-                pass
-    # 清状态文件（避免 start 误判已运行）
-    try:
-        os.remove(STATUS_FILE)
-    except Exception:
-        pass
-    return {"ok": True, "stopped_pid": pid if _pid_alive(pid) else None}
+            pass
+    # 清状态文件（避免 start 误判已运行；等 1.5s 再确认，防桥死前最后写回）
+    for _ in range(3):
+        try:
+            os.remove(STATUS_FILE)
+        except Exception:
+            pass
+        time.sleep(0.5)
+    return {"ok": True, "stopped_pid": stopped}
 
 
 @router.get("/config")
