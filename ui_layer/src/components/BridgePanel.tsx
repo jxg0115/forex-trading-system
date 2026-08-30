@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { Cable, Power, RefreshCw, Save, StopCircle } from "lucide-react";
+import { Cable, Power, RefreshCw, Save, StopCircle, Trash2 } from "lucide-react";
 import { api, type BridgeSettings } from "../api";
 
 const MODULE_LABELS: Record<keyof BridgeSettings, string> = {
@@ -61,6 +61,25 @@ export function BridgePanel({ onNotify }: { onNotify: (type: "success" | "error"
     }
   };
 
+  const clean = async () => {
+    if (!window.confirm("将清空桥记录的数据文件：bars.csv / cmds.csv / trades.csv / stats.txt / equity.csv / bridge_config.csv。\n保留功能勾选（bridge_settings.json）与桥运行状态。确认清理？")) {
+      return;
+    }
+    setBusy(true);
+    try {
+      const res = await api.bridgeClean();
+      const msg = res.ok
+        ? `已清理 ${res.cleared.length} 个数据文件：${res.cleared.join("、")}`
+        : `清理部分失败：${(res.failed ?? []).map((f) => `${f.file}: ${f.error}`).join("；") || "未知错误"}`;
+      onNotify(res.ok ? "success" : "error", msg);
+      await refresh();
+    } catch (e) {
+      onNotify("error", `清理失败：${e instanceof Error ? e.message : String(e)}`);
+    } finally {
+      setBusy(false);
+    }
+  };
+
   const stop = async () => {
     setBusy(true);
     try {
@@ -113,6 +132,9 @@ export function BridgePanel({ onNotify }: { onNotify: (type: "success" | "error"
         </button>
         <button className="btn" onClick={refresh}>
           <RefreshCw size={14} /> 刷新
+        </button>
+        <button className="btn danger" onClick={clean} disabled={busy}>
+          <Trash2 size={14} /> 清理数据
         </button>
       </div>
 

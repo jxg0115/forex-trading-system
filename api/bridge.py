@@ -6,6 +6,8 @@
 - POST /api/bridge/stop    -> 停止桥
 - GET  /api/bridge/config  -> 功能参与勾选（读 bridge_settings.json，无文件用默认）
 - POST /api/bridge/config  -> 保存功能参与勾选（桥实时生效：下个决策循环读取）
+- POST /api/bridge/clean   -> 数据清理按钮：清空桥记录的数据文件（bars/cmds/trades/stats/equity/bridge_config），
+                              保留 bridge_settings.json（功能勾选不删）。清理后桥下个轮询检测到文件清空会自动重置段状态。
 
 桥目录（与 EA 共用）：Common\\Files\\dsb（Tester 沙箱唯一可写路径）。
 """
@@ -124,6 +126,46 @@ def stop() -> dict:
             pass
         time.sleep(0.5)
     return {"ok": True, "stopped_pid": stopped}
+
+
+CLEAN_FILES = {
+    "bars.csv": "time,open,high,low,close",
+    "cmds.csv": "seq,cmd,arg1,arg2,arg3,arg4",
+    "trades.csv": "kind,time,price,dir,vol",
+    "stats.txt": "",
+    "equity.csv": "time_unix,equity_pct_cum",
+    "bridge_config.csv": "",
+}
+# 保留：bridge_settings.json（功能勾选）与 bridge_status.json（桥运行状态）
+
+
+@router.post("/clean")
+def clean() -> dict:
+    """数据清理（前端「清理数据」按钮）：清空桥记录的数据文件。
+
+    清除 bars/cmds/trades/stats/equity/bridge_config 六文件（重写为表头/空），
+    **保留** bridge_settings.json（功能勾选）与 bridge_status.json。
+    桥侧主循环检测到 len(df) < seen_bars（文件清空）会自动归档上一段并重置进度，
+    因此清理后下一轮测试从干净状态开始，互不混合。
+    """
+    os.makedirs(BRIDGE_DIR, exist_ok=True)
+    cleared, failed = [], []
+    for name, header in CLEAN_FILES.items():
+        p = os.path.join(BRIDGE_DIR, name)
+        try:
+            with open(p, "w", encoding="utf-8", newline="") as f:
+                if header:
+                    f.write(header + "\n")
+            cleared.append(name)
+        except Exception as e:
+            failed.append({"file": name, "error": str(e)})
+    return {
+        "ok": not failed,
+        "cleared": cleared,
+        "failed": failed,
+        "settings_preserved": os.path.exists(SETTINGS_FILE),
+        "status_file_preserved": os.path.exists(STATUS_FILE),
+    }
 
 
 @router.get("/config")

@@ -1021,6 +1021,9 @@ export const api = {
   bridgeStop(): Promise<{ ok: boolean; stopped_pid?: number | null; error?: string }> {
     return request("/api/bridge/stop", { method: "POST" });
   },
+  bridgeClean(): Promise<{ ok: boolean; cleared: string[]; failed: Array<{ file: string; error: string }>; settings_preserved: boolean; status_file_preserved: boolean }> {
+    return request("/api/bridge/clean", { method: "POST" });
+  },
   bridgeGetConfig(): Promise<{ settings: BridgeSettings; defaults: BridgeSettings }> {
     return request("/api/bridge/config");
   },
