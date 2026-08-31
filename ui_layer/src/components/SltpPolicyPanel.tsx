@@ -142,6 +142,23 @@ export function SltpPolicyPanel({ onNotify }: SltpPolicyPanelProps) {
     }
   };
 
+  // 引擎总开关：勾选/取消即保存生效（不再需要额外点「保存政策」，
+  // 避免「看起来开了其实没保存、状态仍显示停用」的误导）
+  const toggleEngine = async () => {
+    if (!conf) return;
+    const next = !Boolean(conf.enabled);
+    setBusy(true);
+    try {
+      const res = await api.saveSltpPolicy(sanitize({ ...conf, enabled: next }));
+      onNotify?.("success", next ? "止损止盈引擎已开启并保存生效" : "止损止盈引擎已关闭");
+      await load();
+    } catch (err) {
+      onNotify?.("error", String(err instanceof Error ? err.message : err));
+    } finally {
+      setBusy(false);
+    }
+  };
+
   const c = conf ?? {};
 
   const recommend = useCallback(async () => {
@@ -181,7 +198,7 @@ export function SltpPolicyPanel({ onNotify }: SltpPolicyPanelProps) {
           <label className="field-label" style={{ margin: 0 }}>
             启用引擎
           </label>
-          <input type="checkbox" checked={Boolean(c.enabled)} onChange={() => toggleBool("enabled")} />
+          <input type="checkbox" checked={Boolean(c.enabled)} disabled={busy} onChange={toggleEngine} />
           <label className="field-label" style={{ margin: 0 }}>
             参考品种
           </label>
