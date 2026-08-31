@@ -99,6 +99,13 @@ class MatcherService:
                 "errors": ["无行情数据，跳过扫描"],
                 "scanned": 0,
             }
+        # 因子周期分桶（多周期共振）：按因子自身周期喂数据，
+        # 避免 M15 因子被统一喂 M30 bars 导致信号被周期错位吞掉（开市 10 小时 0 订单根因）。
+        bars_by_tf: dict[str, list[dict[str, Any]]] = {}
+        for _f in factors:
+            _tf = str(_f.timeframe or "").upper() or timeframe.upper()
+            if _tf not in bars_by_tf:
+                bars_by_tf[_tf] = self.market.get_bars(symbol, _tf, limit) or bars
         regime = classify(df)
         macro_trend = self._macro_trend(symbol)
         market_analysis: dict[str, Any] = {}
@@ -119,7 +126,8 @@ class MatcherService:
             if not sandbox.ok:
                 errors.append(f"{factor.name}：沙盒检查未通过，已跳过")
                 continue
-            execution = execute_factor(factor.code, bars, factor.params)
+            factor_bars = bars_by_tf.get(str(factor.timeframe or "").upper() or timeframe.upper(), bars)
+            execution = execute_factor(factor.code, factor_bars, factor.params)
             if not execution.ok or not execution.entry_values:
                 errors.append(f"{factor.name}：因子执行失败（{execution.message}）")
                 continue
