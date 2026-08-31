@@ -236,9 +236,11 @@ async def _system_loop(state: AppState) -> None:
                         state.risk_tripped_warned = False
                 tick = None
                 if connected:
+                    # 点差监控跟随用户选择的匹配品种（避免 auto_trade_symbol 与实盘匹配品种不一致时告警误导）
+                    spread_symbol = (state.matcher_symbol or settings.auto_trade_symbol).upper()
                     try:
                         tick = await asyncio.wait_for(
-                            asyncio.to_thread(state.mt5_gateway.get_tick, settings.auto_trade_symbol),
+                            asyncio.to_thread(state.mt5_gateway.get_tick, spread_symbol),
                             timeout=5,
                         )
                     except Exception:
@@ -252,7 +254,7 @@ async def _system_loop(state: AppState) -> None:
                         await state.notifier.send_alert(
                             "warning",
                             "点差异常",
-                            f"{settings.auto_trade_symbol} 当前点差 {state.last_spread} 点，"
+                            f"{spread_symbol} 当前点差 {state.last_spread} 点，"
                             f"超过阈值 {settings.spread_alert_threshold} 点。",
                         )
                         state.last_spread_alert_at = time.time()
@@ -294,6 +296,9 @@ def restore_saved_matcher_state(state: AppState) -> bool:
     field_names = set(ExecutorRuntimeConfig.__dataclass_fields__)
     config = ExecutorRuntimeConfig(**{k: v for k, v in config_data.items() if k in field_names})
     state.signal_executor.apply_runtime_config(config)
+    # 恢复时强制对齐：执行器下单品种/周期跟随已保存的匹配品种（历史上曾保存 EURUSD 而匹配 XAUUSD 的错位）
+    state.signal_executor.config.symbol = saved.get("symbol") or config.symbol
+    state.signal_executor.config.timeframe = saved.get("timeframe") or config.timeframe
     state.matcher_symbol = saved.get("symbol") or config.symbol
     state.matcher_timeframe = saved.get("timeframe") or config.timeframe
     state.matcher_pattern_min_similarity = float(

@@ -116,6 +116,16 @@ class SignalExecutor:
     async def execute_scan(self, scan_result: dict[str, Any]) -> list[dict[str, Any]]:
         if not self.enabled:
             return []
+        # 防呆：下单品种/周期必须跟随扫描结果（扫描什么就下单什么），
+        # 避免 executor.config 与用户选择的匹配品种错位（历史错位曾导致 XAUUSD 扫描、EURUSD 下单）。
+        scan_sym = str(scan_result.get("symbol") or "").upper()
+        scan_tf = str(scan_result.get("timeframe") or "").upper()
+        if scan_sym and scan_sym != self.config.symbol:
+            print(f"[signal_executor] 同步下单品种 {self.config.symbol} -> {scan_sym}（跟随扫描）")
+            self.config.symbol = scan_sym
+        if scan_tf and scan_tf != self.config.timeframe:
+            print(f"[signal_executor] 同步下单周期 {self.config.timeframe} -> {scan_tf}（跟随扫描）")
+            self.config.timeframe = scan_tf
         config = self.config
         direction_allowed = config.direction
         candidates = [

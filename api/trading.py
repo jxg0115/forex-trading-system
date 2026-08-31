@@ -452,6 +452,9 @@ async def start_matcher(req: MatcherStartRequest, state=Depends(get_app_state)):
     state.matcher_timeframe = req.timeframe
     current_config = state.signal_executor.config
     config_updates: dict[str, Any] = {}
+    # 强制同步：执行器下单品种/周期必须跟随用户选择的匹配品种（不依赖前端是否显式提交 symbol）
+    config_updates["symbol"] = req.symbol
+    config_updates["timeframe"] = req.timeframe
     for field_name in req.model_fields_set:
         if hasattr(current_config, field_name):
             config_updates[field_name] = getattr(req, field_name)
