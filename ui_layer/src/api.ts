@@ -1026,36 +1026,7 @@ export const api = {
   }> {
     return request(`/api/market/status?symbol=${encodeURIComponent(symbol)}&timeframe=${encodeURIComponent(timeframe)}`);
   },
-  bridgeStatus(): Promise<{ running: boolean; status: Record<string, unknown>; settings: BridgeSettings; bridge_dir: string; fresh_s: number }> {
-    return request("/api/bridge/status");
-  },
-  bridgeStart(): Promise<{ ok: boolean; already_running?: boolean; pid?: number; error?: string }> {
-    return request("/api/bridge/start", { method: "POST" });
-  },
-  bridgeStop(): Promise<{ ok: boolean; stopped_pid?: number | null; error?: string }> {
-    return request("/api/bridge/stop", { method: "POST" });
-  },
-  bridgeClean(): Promise<{ ok: boolean; cleared: string[]; failed: Array<{ file: string; error: string }>; settings_preserved: boolean; status_file_preserved: boolean }> {
-    return request("/api/bridge/clean", { method: "POST" });
-  },
-  bridgeGetConfig(): Promise<{ settings: BridgeSettings; defaults: BridgeSettings }> {
-    return request("/api/bridge/config");
-  },
-  bridgeSetConfig(settings: Partial<BridgeSettings>): Promise<{ ok: boolean; settings: BridgeSettings; error?: string }> {
-    return request("/api/bridge/config", {
-      method: "POST",
-      headers: JSON_HEADERS,
-      body: JSON.stringify(settings),
-    });
-  },
+  
 };
 
-export interface BridgeSettings {
-  factors: boolean;
-  sltp: boolean;
-  smart_stop: boolean;
-  events: boolean;
-  risk: boolean;
-  patterns: boolean;
-  ai: boolean;
-}
+

@@ -16,7 +16,7 @@ from fastapi.staticfiles import StaticFiles
 from ai_engine.factor_generator import FactorGenerator
 from ai_engine.ai_manager import AiManager
 from ai_engine.model_pool import ModelPool
-from api import ai, bridge, chat, events, factors, indicators, market, mining, models, mt5, observability, patterns, tick_archive, trading, webhook
+from api import ai, chat, events, factors, indicators, market, mining, models, mt5, observability, patterns, tick_archive, trading, webhook
 from backtest_store.repository import FactorRepository, get_repository
 from config import settings
 from market_data.service import MarketDataService
@@ -358,7 +358,7 @@ def create_app(broker: str | None = None) -> FastAPI:
         allow_headers=["*"],
     )
     app.include_router(market.router)
-    app.include_router(bridge.router)
+    
     app.include_router(ai.router)
     app.include_router(chat.router)
     app.include_router(factors.router)

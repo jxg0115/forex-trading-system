@@ -38,7 +38,7 @@ import { FactorEditModal } from "./components/FactorEditModal";
 import { Mt5Panel } from "./components/Mt5Panel";
 import { OrderLogPanel } from "./components/OrderLogPanel";
 import { FactorMiningPanel } from "./components/FactorMiningPanel";
-import { BridgePanel } from "./components/BridgePanel";
+
 import { MarketStatusPanel } from "./components/MarketStatusPanel";
 import { SltpPolicyPanel } from "./components/SltpPolicyPanel";
 import { SymbolSearchSelect } from "./components/SymbolSearchSelect";
@@ -59,7 +59,7 @@ interface ScanResult {
   scanned: number;
 }
 
-type MainTab = "factors" | "market" | "trading" | "replay" | "ai" | "sltp" | "mining" | "bridge";
+type MainTab = "factors" | "market" | "trading" | "replay" | "ai" | "sltp" | "mining";
 type SubTab = "mark" | "backtest" | "manage" | "signals" | "mt5" | "replay" | "orders" | "stats" | "optimize" | "sltp";
 
 const TIMEFRAMES = ["M1", "M5", "M15", "M30", "H1", "H4", "D1"];
@@ -2165,12 +2165,10 @@ export default function App() {
             <button className={`tab ${tab === "trading" ? "active" : ""}`} onClick={() => { setTab("trading"); setSubTab("signals"); }}><Activity size={14} /> 交易中心</button>
             <button className={`tab ${tab === "replay" ? "active" : ""}`} onClick={() => { setTab("replay"); setSubTab("replay"); }}><FileText size={14} /> 复盘与日志</button>
             <button className={`tab ${tab === "ai" ? "active" : ""}`} onClick={() => setTab("ai")}><Cpu size={14} /> AI 管理</button>
-            <button className={`tab ${tab === "bridge" ? "active" : ""}`} onClick={() => setTab("bridge")}><Cable size={14} /> MT5 测试器桥</button>
           </div>
 
           <div className="panel-body">
             {tab === "mining" && <FactorMiningPanel onNotify={notify} />}
-            {tab === "bridge" && <BridgePanel onNotify={notify} />}
             {tab === "market" && <MarketStatusPanel />}
             {tab === "factors" && (
               <div className="sub-tabs">
