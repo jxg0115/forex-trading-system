@@ -184,6 +184,7 @@ class SltpPolicyManager:
         current_sl = float(pos.get("sl") or 0.0)
         current_tp = float(pos.get("tp") or 0.0)
 
+        open_ts = float(pos.get("time") or 0.0) or now_ts  # 开仓时间（冷却基准）
         state = self._state.setdefault(
             ticket,
             {
@@ -192,6 +193,7 @@ class SltpPolicyManager:
                 "partial_closed": 0.0,
                 "partial_at": set(),
                 "last_modify_at": 0.0,
+                "opened_at": open_ts,
             },
         )
         if side == "BUY":
@@ -245,25 +247,30 @@ class SltpPolicyManager:
                 if peak_r >= trigger_r and self._gate_ok(tier.get("gate") or {}, gates):
                     reached += 1
             force_lvl = reached
-            if adv.get("time_force_bars") and bars_held >= int(adv["time_force_bars"]):
-                force_lvl = max(force_lvl, min(reached + 1, len(policy.ladder_tiers)))
-                fired.append("超时强制上档")
-            if (
-                adv.get("rsi_extreme_force") and gates.get("rsi_extreme")
-            ) or (
-                adv.get("macd_reverse_force") and gates.get("macd_reverse")
-            ) or (
-                adv.get("boll_touch_force") and gates.get("boll_touch")
-            ):
-                force_lvl = max(force_lvl, 1)
-                fired.append("指标强制锁利")
-            if gates.get("session") == "亚洲":
-                force_lvl = max(force_lvl, 1)
-                fired.append("亚洲时段早锁利")
+            # 强制锁利前提：仓位已有实际盈利（约 0.1R）——未盈利仓位不得被锁到保本位，
+            # 否则「指标/超时/亚洲时段」锁利会把 SL 拉到开仓价，开仓后任意回撤立即平仓（盈利 0）。
+            if peak_r >= 0.1:
+                if adv.get("time_force_bars") and bars_held >= int(adv["time_force_bars"]):
+                    force_lvl = max(force_lvl, min(reached + 1, len(policy.ladder_tiers)))
+                    fired.append("超时强制上档")
+                if (
+                    adv.get("rsi_extreme_force") and gates.get("rsi_extreme")
+                ) or (
+                    adv.get("macd_reverse_force") and gates.get("macd_reverse")
+                ) or (
+                    adv.get("boll_touch_force") and gates.get("boll_touch")
+                ):
+                    force_lvl = max(force_lvl, 1)
+                    fired.append("指标强制锁利")
+                if gates.get("session") == "亚洲":
+                    force_lvl = max(force_lvl, 1)
+                    fired.append("亚洲时段早锁利")
             for idx, tier in enumerate(policy.ladder_tiers):
                 if idx < force_lvl:
                     raise_sl_r = float(tier.get("raise_to_r") or 0.0)
-                    stop_candidates.append(entry + direction * raise_sl_r * r_unit)
+                    # 锁利距离保底：至少 0.1×ATR 缓冲（raise=0 的保本档不得紧贴开仓价）
+                    distance = max(raise_sl_r * r_unit, policy.breakeven_buffer_atr * atr)
+                    stop_candidates.append(entry + direction * distance)
                     if idx < reached:
                         fired.append(f"阶梯{float(tier.get('trigger_r') or 0.0):g}R")
 
@@ -398,7 +405,9 @@ class SltpPolicyManager:
         close_action = plan["close_action"]
         partial_lots = plan["partial_lots"]
         partial_idx = plan["partial_idx"]
-        cooled = now_ts - float(state.get("last_modify_at") or 0.0) >= policy.modify_cooldown_seconds
+        # 冷却基准含开仓时间：开仓后 modify_cooldown_seconds 内不得调整 SL/TP（避免开仓即被拉到保本位平仓）
+        base_ts = max(float(state.get("last_modify_at") or 0.0), float(state.get("opened_at") or 0.0))
+        cooled = now_ts - base_ts >= policy.modify_cooldown_seconds
 
         if close_action:
             self.gateway.close_position(ticket)
