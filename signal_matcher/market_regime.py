@@ -32,6 +32,8 @@ def classify(df: pd.DataFrame) -> MarketRegime:
     adx_now = float(adx.iloc[-1]) if len(adx) else 0.0
     ema_fast = close.ewm(span=10, adjust=False).mean()
     ema_slow = close.ewm(span=50, adjust=False).mean()
+    ema_disp = abs(float(ema_fast.iloc[-1] - ema_fast.iloc[-20])) if len(ema_fast) >= 20 else 0.0
+    momentum = ema_disp / atr_now if atr_now > 0 else 0.0
     with np.errstate(invalid="ignore", divide="ignore"):
         slope = (ema_fast.iloc[-1] - ema_fast.iloc[-20]) / ema_fast.iloc[-20] * 1000.0 if len(ema_fast) >= 20 else 0.0
 
@@ -42,12 +44,12 @@ def classify(df: pd.DataFrame) -> MarketRegime:
     else:
         volatility = "低波动"
 
-    if adx_now >= 25 and abs(slope) > 0.3:
+    if adx_now >= 25 and momentum >= 1.0:
         name = "强趋势" + ("上行" if slope > 0 else "下行")
-        detail = f"ADX {adx_now:.1f}，均线斜率 {slope:.2f}，适合趋势跟踪因子"
+        detail = f"ADX {adx_now:.1f}，EMA 动量 {momentum:.2f} ATR，适合趋势跟踪因子"
     elif adx_now >= 20:
         name = "弱趋势"
-        detail = f"ADX {adx_now:.1f}，趋势尚不稳固，建议减少追价"
+        detail = f"ADX {adx_now:.1f}，EMA 动量 {momentum:.2f} ATR，趋势尚不稳固，建议减少追价"
     else:
         name = "震荡"
         detail = f"ADX {adx_now:.1f}，区间特征明显，适合均值回归因子"
