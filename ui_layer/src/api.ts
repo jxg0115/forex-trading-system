@@ -104,6 +104,44 @@ export interface MarketStatusPayload {
   } | null;
 }
 
+export interface CalendarDetail {
+  ticket: string;
+  symbol: string;
+  side: string;
+  volume: number;
+  entry_time: number;
+  entry_price: number;
+  exit_time: number;
+  exit_price: number;
+  pnl: number;
+  reason: string;
+}
+
+export interface CalendarDay {
+  date: string;
+  realized_pnl: number;
+  floating_pnl: number;
+  total_pnl: number;
+  closed_count: number;
+  win_count: number;
+  loss_count: number;
+  win_rate: number | null;
+  avg_win: number | null;
+  avg_loss: number | null;
+  profit_factor: number | null;
+  max_win: number | null;
+  max_loss: number | null;
+  details: CalendarDetail[];
+}
+
+export interface CalendarPayload {
+  date_from: string;
+  date_to: string;
+  floating_now: number;
+  days: CalendarDay[];
+  total: number;
+}
+
 export interface Factor extends FactorDraft {
   id: string;
   symbol: string;
@@ -1056,6 +1094,9 @@ export const api = {
   },
   marketStatus(symbol = "XAUUSD", timeframe = "M15"): Promise<MarketStatusPayload> {
     return request(`/api/market/status?symbol=${encodeURIComponent(symbol)}&timeframe=${encodeURIComponent(timeframe)}`);
+  },
+  calendar(dateFrom: string, dateTo: string): Promise<CalendarPayload> {
+    return request(`/api/analytics/calendar?date_from=${encodeURIComponent(dateFrom)}&date_to=${encodeURIComponent(dateTo)}`);
   },
   
 };
