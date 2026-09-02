@@ -386,7 +386,7 @@ export default function App() {
     market_filter_volatilities: ["高波动", "中等波动"] as string[],
     market_filter_volume_states: ["放量", "正常"] as string[],
     market_filter_macro_directions: ["up", "down"] as string[],
-    market_filter_d1_directions: ["up", "down"] as string[],
+    market_filter_d1_directions: [] as string[],
     market_filter_h4_directions: ["up", "down"] as string[],
     market_filter_min_score: "0",
   });
