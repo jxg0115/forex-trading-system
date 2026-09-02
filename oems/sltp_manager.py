@@ -16,7 +16,10 @@ _format_ai_bars/_parse_ai_advice），旧引擎文件保留不拆。
 from __future__ import annotations
 
 import asyncio
+import sys
 import time
+from pathlib import Path
+from types import SimpleNamespace
 from typing import Any, Optional
 
 import pandas as pd
@@ -25,6 +28,23 @@ from observability.notifier import Notifier
 from oems.order_manager import OrderManager
 from oems.smart_stop import _atr_of, _bars_since_entry, _format_ai_bars, _parse_ai_advice, _swing_levels
 from oems.sltp_policy import SltpPolicyConfig
+
+
+# ---- 外部供给层（exit_manager 算法库：收益K线 / 估计器 / 七档动态合成）----
+# 整合定位：供给层只提供"采样与档位算法"，执行与仲裁仍在本引擎（六单元矩阵）。
+# 依赖不可用时整体降级（三个开关默认关闭，行为与整合前完全一致）。
+_EXIT_MANAGER_DIR = str(Path(__file__).resolve().parent.parent / "exit_manager")
+if _EXIT_MANAGER_DIR not in sys.path:
+    sys.path.insert(0, _EXIT_MANAGER_DIR)
+try:
+    from framework.profit_kline import BarConfig, ProfitKlineGenerator, Snapshot
+    from framework.estimators import EstimatorBundle
+    from framework.indicators import IndicatorSnapshot
+    from strategy.threshold_scheduler import ThresholdScheduler
+
+    _SUPPLY_OK = True
+except Exception:  # 供给层缺失/损坏 -> 降级（开关全关时无任何影响）
+    _SUPPLY_OK = False
 
 
 def _better_stop(new_stop: float, current_stop: float, side: str, current: float) -> bool:
@@ -160,6 +180,8 @@ class SltpPolicyManager:
                     "active_units": plan.get("fired") or [],
                     "plan_action": plan.get("plan_action") or "保持",
                     "last_update": recent,
+                    "audit": plan.get("audit"),
+                    "supply": plan.get("supply"),
                 }
             )
         return out
@@ -196,6 +218,18 @@ class SltpPolicyManager:
                 "opened_at": open_ts,
             },
         )
+        # 供给层逐单状态（懒构造：任一整合开关打开且库可用时才建，逐单隔离）
+        if (
+            _SUPPLY_OK
+            and (policy.dynamic_thresholds or policy.event_driven or policy.audit_detail)
+            and state.get("gen") is None
+        ):
+            state["gen"] = ProfitKlineGenerator(BarConfig(threshold_r=0.25, max_seconds=900.0))
+            state["est"] = EstimatorBundle()
+            state["sch"] = ThresholdScheduler()
+            state["est_n"] = 0
+            state["event_count"] = 0
+            state["audit"] = None
         if side == "BUY":
             state["peak_price"] = max(float(state.get("peak_price") or current), current)
         else:
@@ -217,13 +251,69 @@ class SltpPolicyManager:
         profit_r = (current - entry) * direction / r_unit
         peak_r = (float(state["peak_price"]) - entry) * direction / r_unit
 
+        # ---- 供给层增强（整合点：收益K线采样 -> 估计器 -> 七档动态合成） ----
+        supply: dict[str, Any] = {}
+        if _SUPPLY_OK and state.get("gen") is not None and (
+            policy.dynamic_thresholds or policy.event_driven or policy.audit_detail
+        ):
+            snap = Snapshot(ts=now_ts, price=current, floating_r=profit_r,
+                            remaining_frac=1.0, direction=int(direction))
+            committed = state["gen"].on_snapshot(snap)
+            if committed is not None:
+                state["est"].on_bar(committed)
+                state["est_n"] = int(state.get("est_n") or 0) + 1
+                if policy.event_driven:
+                    state["event_count"] = int(state.get("event_count") or 0) + 1
+                    supply["event"] = state["event_count"]  # 介入快事件计数（审计可见）
+            if policy.dynamic_thresholds:
+                try:
+                    ind_snap = IndicatorSnapshot(atr=atr, spread_pip=0.0, spread_pip_avg=0.0)
+                    est_out = state["est"].snapshot(now_ts, ind_snap)
+                    order_proxy = SimpleNamespace(
+                        dd_avg=0.3,  # V1：收益K线回撤近似常量（后续可逐单累计）
+                        hold_frac=min(bars_held / max(policy.time_stop_bars, 1), 1.0),
+                    )
+                    supply["thr"] = state["sch"].compute(est_out, order_proxy, ts=now_ts)
+                except Exception as _e:  # 估计/合成异常 -> 退回固定档（诚实降级）
+                    supply["thr_error"] = str(_e)
+            if policy.audit_detail:
+                _b = state["gen"].live or (
+                    state["gen"].committed[-1] if state["gen"].committed else None
+                )
+                if _b is not None:
+                    supply["bar"] = {
+                        "idx": _b.idx,
+                        "close_r": round(_b.close_r, 3),
+                        "dd_rate": round(_b.dd_rate, 3),
+                    }
+                thr = supply.get("thr")
+                if thr is not None and getattr(thr, "audit", None):
+                    supply["thr_audit"] = dict(thr.audit)
+
+        # 动态档位覆盖（打开时替换固定档；无效/未打开退回 policy 固定值）
+        dyn: dict[str, Any] = {}
+        thr = supply.get("thr")
+        if thr is not None and policy.dynamic_thresholds:
+            dyn["breakeven_trigger_r"] = round(float(thr.be_r), 3)
+            dyn["ladder_tiers"] = [
+                {"trigger_r": round(float(thr.be_r), 3), "raise_to_r": 0.0, "gate": {}},
+                {"trigger_r": round(float(thr.partial1_r), 3), "raise_to_r": round(float(thr.be_r), 3), "gate": {}},
+                {"trigger_r": round(float(thr.partial2_r), 3), "raise_to_r": round(float(thr.partial1_r), 3), "gate": {}},
+            ]
+            dyn["partial_tiers"] = [
+                {"trigger_r": round(float(thr.partial1_r), 3), "close_pct": 30, "gate": {}},
+                {"trigger_r": round(float(thr.partial2_r), 3), "close_pct": 40, "gate": {}},
+            ]
+            dyn["hw_activation_r"] = round(float(thr.trail_start_r), 3)
+            dyn["time_stop_bars"] = int(thr.max_hold_bars)
+
         stop_candidates: list[float] = []
         take_candidates: list[float] = []
         fired: list[str] = []
         close_action: str | None = None  # "time" | "high_watermark" | "ai_close"
 
         # —— ① 保本单元 ——
-        if policy.breakeven_enabled and profit_r >= policy.breakeven_trigger_r:
+        if policy.breakeven_enabled and profit_r >= dyn.get("breakeven_trigger_r", policy.breakeven_trigger_r):
             stop_candidates.append(entry + direction * policy.breakeven_buffer_atr * atr)
             fired.append("保本")
 
@@ -242,7 +332,7 @@ class SltpPolicyManager:
         if policy.ladder_enabled:
             adv = policy.ladder_advance or {}
             reached = 0
-            for tier in policy.ladder_tiers:
+            for tier in dyn.get("ladder_tiers", policy.ladder_tiers):
                 trigger_r = float(tier.get("trigger_r") or 0.0)
                 if peak_r >= trigger_r and self._gate_ok(tier.get("gate") or {}, gates):
                     reached += 1
@@ -251,7 +341,7 @@ class SltpPolicyManager:
             # 否则「指标/超时/亚洲时段」锁利会把 SL 拉到开仓价，开仓后任意回撤立即平仓（盈利 0）。
             if peak_r >= 0.1:
                 if adv.get("time_force_bars") and bars_held >= int(adv["time_force_bars"]):
-                    force_lvl = max(force_lvl, min(reached + 1, len(policy.ladder_tiers)))
+                    force_lvl = max(force_lvl, min(reached + 1, len(dyn.get("ladder_tiers", policy.ladder_tiers))))
                     fired.append("超时强制上档")
                 if (
                     adv.get("rsi_extreme_force") and gates.get("rsi_extreme")
@@ -279,7 +369,7 @@ class SltpPolicyManager:
         partial_idx: int | None = None
         partial_tier: str | None = None
         if policy.partial_close_enabled:
-            for idx, tier in enumerate(policy.partial_close_tiers):
+            for idx, tier in enumerate(dyn.get("partial_tiers", policy.partial_close_tiers)):
                 if idx in state["partial_at"]:
                     continue
                 trigger_r = float(tier.get("trigger_r") or 0.0)
@@ -298,7 +388,7 @@ class SltpPolicyManager:
         # —— ⑤ 高水位离场单元（峰值回落超容忍 → 全平） ——
         if (
             policy.high_watermark_enabled
-            and peak_r >= policy.hw_activation_r
+            and peak_r >= dyn.get("hw_activation_r", policy.hw_activation_r)
             and not close_action
         ):
             retrace_atr = (float(state["peak_price"]) - current) * direction / atr
@@ -309,7 +399,7 @@ class SltpPolicyManager:
         # —— ⑥ 时间止损单元（超时未达标 → 离场或收紧） ——
         if (
             policy.time_stop_enabled
-            and bars_held >= policy.time_stop_bars
+            and bars_held >= dyn.get("time_stop_bars", policy.time_stop_bars)
             and profit_r < policy.time_stop_min_profit_r
             and not close_action
         ):
@@ -390,6 +480,8 @@ class SltpPolicyManager:
             "fired": fired,
             "dims": dims,
             "plan_action": plan_action,
+            "audit": supply.get("thr_audit") if policy.audit_detail else None,
+            "supply": {k: v for k, v in supply.items() if k not in ("thr", "thr_audit")},
         }
 
     # ---------- 执行（动作 + 冷却 + 状态） ----------

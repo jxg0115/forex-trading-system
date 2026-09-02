@@ -98,6 +98,11 @@ class SltpPolicyConfig:
     boll_touch_enabled: bool = True
     swing_bars: int = 10
 
+    # ---- 外部供给层增强（整合版：收益K线事件驱动 / 动态档位 / 审计细节）----
+    event_driven: bool = False          # 收益K线事件驱动采样（介入快标记，审计可见）
+    dynamic_thresholds: bool = False    # 七档动态合成供给六单元档位（覆盖固定 R 档）
+    audit_detail: bool = False          # 决策审计细节（估计量/档位来源，diagnose 查看）
+
     # ---- AI 辅助层（L6，默认关闭）----
     ai_enabled: bool = False
     ai_take_profit_enabled: bool = True
