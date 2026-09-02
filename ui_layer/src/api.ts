@@ -62,6 +62,48 @@ export type FactorPayload = Partial<FactorDraft> & {
   market_adapt?: Record<string, unknown>;
 };
 
+export interface MarketFilterConfig {
+  enabled?: boolean;
+  trends?: string[];
+  volatilities?: string[];
+  volume_states?: string[];
+  macro_directions?: string[];
+  mtf_directions?: Record<string, string[]>;
+  min_environment_score?: number;
+}
+
+export interface MarketStatusPayload {
+  symbol: string;
+  timeframe: string;
+  market: {
+    is_open: boolean;
+    session: string;
+    now_ts: number;
+    market_time: string;
+    market_time_iso: string;
+    beijing_time: string;
+    beijing_time_iso: string;
+    weekday: number;
+    next_open_ts: number | null;
+    next_close_ts: number | null;
+    weekly_hours: string;
+    daily_close_window: string;
+    in_daily_close_window: boolean;
+  };
+  filter_config: MarketFilterConfig;
+  last_market_skip: {
+    time: string;
+    symbol: string;
+    timeframe: string;
+    label: string;
+    trend_direction?: string;
+    volatility?: string;
+    volume_state?: string;
+    environment_score?: number;
+    reason: string;
+  } | null;
+}
+
 export interface Factor extends FactorDraft {
   id: string;
   symbol: string;
@@ -1012,18 +1054,7 @@ export const api = {
       body: JSON.stringify(payload),
     });
   },
-  marketStatus(symbol = "XAUUSD", timeframe = "M15"): Promise<{
-    symbol: string;
-    timeframe: string;
-    market: {
-      is_open: boolean;
-      session: "open" | "closed";
-      now_ts: number;
-      next_open_ts: number;
-      next_close_ts: number | null;
-      weekday: number;
-    };
-  }> {
+  marketStatus(symbol = "XAUUSD", timeframe = "M15"): Promise<MarketStatusPayload> {
     return request(`/api/market/status?symbol=${encodeURIComponent(symbol)}&timeframe=${encodeURIComponent(timeframe)}`);
   },
   

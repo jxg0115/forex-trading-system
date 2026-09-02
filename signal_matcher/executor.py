@@ -136,20 +136,50 @@ class SignalExecutor:
             and c.get("confidence", 0.0) >= config.min_confidence
         ]
         if not candidates:
+            print(f"[executor] 无候选通过门槛：direction={direction_allowed} min_conf={config.min_confidence}")
             return []
 
         positions = await self.orders.positions()
         open_symbols = {p.symbol for p in positions}
         if len(open_symbols) >= config.max_positions:
+            print(f"[executor] 持仓已达上限：open={len(open_symbols)} max={config.max_positions}")
             return []
 
         now = datetime.now(timezone.utc)
         bars = self._bars(config.symbol)
         if not bars:
+            print(f"[executor] bars 为空：{config.symbol}/{config.timeframe}（gateway_connected={bool(self.gateway and self.gateway.is_connected)}）")
             return []
         market_filter = config.market_filter or {}
+        print(f"[executor] 过候选/持仓/bars 检查，进行情过滤：enabled={market_filter.get('enabled')}")
         if market_filter.get("enabled"):
             market = self._market_environment(config.symbol, config.timeframe)
+            if not market:
+                # 行情环境数据不可用（分析失败/数据源异常）——防御性拦截，不冒险开仓
+                self.last_market_skip = {
+                    "time": now.isoformat(),
+                    "symbol": config.symbol,
+                    "timeframe": config.timeframe,
+                    "label": "",
+                    "trend_direction": None,
+                    "volatility": None,
+                    "volume_state": None,
+                    "environment_score": None,
+                    "reason": "行情环境数据不可用（分析失败），防御性拦截，不冒险开仓",
+                }
+                return []
+            import json as _json
+
+            _mtf_layers = {
+                str(l.get("key") or "").lower(): str(l.get("direction") or "flat")
+                for l in ((market.get("multi_timeframe") or {}).get("layers") or [])
+            }
+            print(
+                f"[executor] 匹配输入: tf={config.timeframe} "
+                f"mtf配置={_json.dumps(market_filter.get('mtf_directions'), ensure_ascii=False)} "
+                f"层={_json.dumps(_mtf_layers, ensure_ascii=False)} "
+                f"非空={bool(market)}"
+            )
             if not matches_market_filter(market_filter, market):
                 self.last_market_skip = {
                     "time": now.isoformat(),
@@ -200,18 +230,25 @@ class SignalExecutor:
                     f"exec:{factor_id}:{config.symbol}:{config.timeframe}:"
                     f"{bars[-1].get('time') if bars else ''}"
                 )
-                order = await self.orders.place_order(
-                    symbol=config.symbol,
-                    side=side,
-                    lots=sizing["lots"],
-                    stop_price=sizing["stop_price"],
-                    take_price=sizing["take_price"],
-                    factor_id=factor_id,
-                    factor_name=factor_name,
-                    reason="AI 自动执行",
-                    idempotency_key=idempotency_key,
+                order = await asyncio.wait_for(
+                    self.orders.place_order(
+                        symbol=config.symbol,
+                        side=side,
+                        lots=sizing["lots"],
+                        stop_price=sizing["stop_price"],
+                        take_price=sizing["take_price"],
+                        factor_id=factor_id,
+                        factor_name=factor_name,
+                        reason="AI 自动执行",
+                        idempotency_key=idempotency_key,
+                    ),
+                    timeout=15.0,
                 )
-            except RuntimeError as exc:
+            except Exception as exc:  # noqa: BLE001
+                if not isinstance(exc, RuntimeError):
+                    import traceback
+
+                    traceback.print_exc()
                 failure = {
                     "time": now.isoformat(),
                     "factor_id": factor_id,

@@ -48,6 +48,7 @@ async def system_state(state=Depends(get_app_state)):
         "executor_config": state.signal_executor.config.to_dict(),
         "risk_tripped": state.risk_tripped,
         "risk_reasons": state.risk_reasons,
+        "last_market_skip": state.signal_executor.last_market_skip,
         "last_executions": state.signal_executor.last_executions[:10],
         "executor_failures": state.signal_executor.last_failures[:5],
         "last_spread": state.last_spread,

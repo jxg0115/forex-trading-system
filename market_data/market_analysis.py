@@ -193,9 +193,12 @@ class MarketAnalysisEngine:
                 expand_parts.append(f"{tf_name}方向未明确")
                 continue
             if anchor_dir != "flat" and layer["direction"] == anchor_dir:
-                confirm_layer = tf_name
-                expand_parts.append(f"{tf_name}与主层同向，方向确认")
-                break
+                # 记录确认层，但不停：继续向上扩展，保证 H4/D1 层完整输出，
+                # 供行情过滤的 mtf_directions（H4/D1 共振）真实检查。
+                if not confirm_layer:
+                    confirm_layer = tf_name
+                    expand_parts.append(f"{tf_name}与主层同向，方向确认（继续向上扩展）")
+                continue
             if anchor_dir == "flat" and not base_layer:
                 base_layer = tf_name
                 expand_parts.append(f"{tf_name}定义当前方向（主层等待入场）")

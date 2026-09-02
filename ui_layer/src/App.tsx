@@ -381,12 +381,13 @@ export default function App() {
     max_drawdown_pct: "20",
     pattern_min_similarity: "0.85",
     pattern_min_samples: "0",
-    market_filter_enabled: false,
-    market_filter_trends: [] as string[],
-    market_filter_volatilities: [] as string[],
-    market_filter_volume_states: [] as string[],
-    market_filter_macro_directions: [] as string[],
-    market_filter_d1_directions: [] as string[],
+    market_filter_enabled: true,
+    market_filter_trends: ["up", "down"] as string[],
+    market_filter_volatilities: ["高波动", "中等波动"] as string[],
+    market_filter_volume_states: ["放量", "正常"] as string[],
+    market_filter_macro_directions: ["up", "down"] as string[],
+    market_filter_d1_directions: ["up", "down"] as string[],
+    market_filter_h4_directions: ["up", "down"] as string[],
     market_filter_min_score: "0",
   });
   const [matcherMarketAnalysis, setMatcherMarketAnalysis] = useState<Record<string, unknown> | null>(null);
@@ -1241,6 +1242,7 @@ export default function App() {
             market_filter_volume_states: (mf.volume_states as string[] | undefined) ?? v.market_filter_volume_states,
             market_filter_macro_directions: (mf.macro_directions as string[] | undefined) ?? v.market_filter_macro_directions,
             market_filter_d1_directions: (((mf as Record<string, unknown>).mtf_directions as { d1?: string[] } | undefined)?.d1 ?? []) as string[],
+            market_filter_h4_directions: (((mf as Record<string, unknown>).mtf_directions as { h4?: string[] } | undefined)?.h4 ?? []) as string[],
             market_filter_min_score: String(mf.min_environment_score ?? v.market_filter_min_score),
           }
         : {}),
@@ -1304,7 +1306,10 @@ export default function App() {
           volatilities: matcherForm.market_filter_volatilities,
           volume_states: matcherForm.market_filter_volume_states,
           macro_directions: matcherForm.market_filter_macro_directions,
-          mtf_directions: matcherForm.market_filter_d1_directions.length ? { d1: matcherForm.market_filter_d1_directions } : undefined,
+          mtf_directions: {
+            ...(matcherForm.market_filter_d1_directions.length ? { d1: matcherForm.market_filter_d1_directions } : {}),
+            ...(matcherForm.market_filter_h4_directions.length ? { h4: matcherForm.market_filter_h4_directions } : {}),
+          },
           min_environment_score: toNum(matcherForm.market_filter_min_score, 0),
         },
       });
@@ -3250,6 +3255,17 @@ export default function App() {
                 </div>
                 <div>
                   <label className="field-label">大周期方向（H4）</label>
+                  <div style={{ display: "flex", flexWrap: "wrap", gap: 8 }}>
+                    {([["up", "上行"], ["down", "下行"]] as [string, string][]).map(([val, label]) => (
+                      <label key={val} style={{ display: "flex", alignItems: "center", gap: 4, fontSize: 12 }}>
+                        <input type="checkbox" checked={matcherForm.market_filter_h4_directions.includes(val)} onChange={(e) => setMatcherForm((v) => ({ ...v, market_filter_h4_directions: toggleIn(v.market_filter_h4_directions, val) }))} />
+                        {label}
+                      </label>
+                    ))}
+                  </div>
+                </div>
+                <div>
+                  <label className="field-label">宏观方向（M30 背景）</label>
                   <div style={{ display: "flex", flexWrap: "wrap", gap: 8 }}>
                     {([["up", "上行"], ["down", "下行"]] as [string, string][]).map(([val, label]) => (
                       <label key={val} style={{ display: "flex", alignItems: "center", gap: 4, fontSize: 12 }}>

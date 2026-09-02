@@ -280,6 +280,9 @@ async def _system_loop(state: AppState) -> None:
         except asyncio.CancelledError:
             break
         except Exception:
+            import traceback
+
+            traceback.print_exc()
             await asyncio.sleep(2.0)
 
 
@@ -316,6 +319,9 @@ def restore_saved_matcher_state(state: AppState) -> bool:
     if not saved.get("matcher_running"):
         return False
     state.matcher_running = True
+    # 重启后恢复"实盘匹配运行中"：执行器必须同步打开，否则主循环只扫描不下单
+    # （execute_scan 入口 if not self.enabled: return []，此前重启后一直静默空转）
+    state.signal_executor.set_enabled(True)
     return True
 
 

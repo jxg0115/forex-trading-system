@@ -35,9 +35,27 @@ async def get_snapshot(symbol: str = "EURUSD", timeframe: str = "M15", state=Dep
 
 
 @router.get("/status")
-async def get_market_status(symbol: str = "XAUUSD", timeframe: str = "M15"):
-    # 纯时间需求：市场状态/开市·收市倒计时（不依赖行情，MT5 离线也能用）
-    return {"symbol": symbol, "timeframe": timeframe, "market": market_state()}
+async def get_market_status(
+    symbol: str = "XAUUSD",
+    timeframe: str = "M15",
+    state=Depends(get_app_state),
+):
+    # 市场状态/开市·收市倒计时（不依赖行情）+ 当前生效的行情过滤配置 + 最近拦截原因
+    mkt = market_state()
+    executor = getattr(state, "signal_executor", None)
+    filter_config = {}
+    skip = None
+    if executor is not None:
+        cfg = getattr(executor, "config", None)
+        filter_config = (getattr(cfg, "market_filter", None) or {}) if cfg is not None else {}
+        skip = getattr(executor, "last_market_skip", None)
+    return {
+        "symbol": symbol,
+        "timeframe": timeframe,
+        "market": mkt,
+        "filter_config": filter_config,
+        "last_market_skip": skip,
+    }
 
 
 @router.get("/analysis")
