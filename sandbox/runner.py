@@ -36,6 +36,10 @@ _real_import = builtins.__import__
 
 def _safe_import(name, *args, **kwargs):
     root = name.split(".")[0]
+    # pandas/numpy 内部惰性依赖 concurrent 包（先 import 裸包再取 .futures，线程池）；
+    # 因子显式 import concurrent* 仍由 AST 层拒绝（root 不在 ALLOWED_IMPORTS）
+    if root == "concurrent":
+        return _real_import(name, *args, **kwargs)
     if root in _DENIED_IMPORTS:
         raise RuntimeError("禁止导入模块：" + name)
     if root in _ALLOWED_MODULES or root in _STDLIB_NAMES or name in sys.modules:
