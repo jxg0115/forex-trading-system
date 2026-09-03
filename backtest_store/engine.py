@@ -118,9 +118,14 @@ class Backtester:
         atr_ratio_win = max(int(system_filter.get("atr_ratio_win") or 40), 1)
         no_entry_hour: set[int] = set(int(h) for h in (system_filter.get("no_entry_hour") or []))
         daily_loss_limit = max(float(system_filter.get("daily_loss_limit") or 0.0), 0.0)
+        price_window = max(int(system_filter.get("price_window") or 0), 0)
+        price_percentile_max = max(float(system_filter.get("price_percentile_max") or 0.0), 0.0)  # 高位禁多（0=关）
+        price_percentile_min = max(float(system_filter.get("price_percentile_min") or 0.0), 0.0)  # 低位禁空（0=关）
         use_dynamic_sltp = bool(p.get("dynamic_sltp")) and _SUPPLY_OK
         trend_line = df["close"].rolling(trend_ma).mean() if trend_ma > 0 else None
         atr_base = atr.rolling(atr_ratio_win).mean() if atr_ratio_max > 0 else None
+        price_range_hi = df["high"].rolling(price_window).max() if price_window > 0 else None
+        price_range_lo = df["low"].rolling(price_window).min() if price_window > 0 else None
         leverage = max(float(p["leverage"]), 1.0)
         slippage = max(float(p["slippage_price"]), 0.0)
         spread_points = max(float(p.get("spread_points") or 0.0), 0.0)
@@ -208,6 +213,15 @@ class Backtester:
                         last_ts = df.index[i - 1]
                         if isinstance(last_ts, pd.Timestamp) and last_ts.hour in no_entry_hour:
                             sig = 0.0
+                    if sig != 0.0 and price_range_hi is not None:
+                        hi = float(price_range_hi.iloc[i - 1])
+                        lo = float(price_range_lo.iloc[i - 1])
+                        if not math.isnan(hi) and not math.isnan(lo) and hi > lo:
+                            pos_pct = (float(df["close"].iloc[i - 1]) - lo) / (hi - lo)
+                            if side == "long" and price_percentile_max > 0 and pos_pct >= price_percentile_max:
+                                sig = 0.0  # 高位禁多（趋势末端保护）
+                            if side == "short" and price_percentile_min > 0 and pos_pct <= price_percentile_min:
+                                sig = 0.0  # 低位禁空
                     if sig != 0.0 and daily_loss_limit > 0 and day_realized <= -daily_loss_limit:
                         sig = 0.0
                     if sig != 0.0:
