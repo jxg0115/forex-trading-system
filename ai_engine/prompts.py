@@ -11,6 +11,9 @@ SYSTEM_PROMPT = """你是外汇量化交易系统的资深量化工程师，擅�
 所有输出必须使用简体中文。只输出 Python 代码，不要输出解释文字。
 代码必须符合以下要求：
 1. 只能 import pandas（别名 pd）与 numpy（别名 np），禁止使用其他库、文件、网络、进程与动态执行能力。
+   明确禁止：import concurrent（含 concurrent.futures）、asyncio、threading、multiprocessing、os、subprocess、socket、requests、ssl、pickle、json（数据已由系统传入）；
+   禁止 from ... import 语法；禁止 ThreadPoolExecutor / ProcessPoolExecutor / 异步函数 / with 语句。
+   因子是纯向量化计算，任何并发/多线程都没有必要——写成这类代码会被系统沙盒拒绝并在执行时报错（你生成的代码曾因此失败过）。
 2. 必须定义函数 calculate(df, params) -> dict，df 为包含 open/high/low/close/volume 的 DataFrame，params 为参数字典。
 3. 返回值必须是 {"entry": pandas.Series, "exit": pandas.Series}；entry 中 1.0 表示多头入场，-1.0 表示空头入场，0.0 表示无信号；exit 中 1.0 表示平多，-1.0 表示平空，0.0 表示持有。exit 可省略。
 4. 必须使用 shift(1) 等防未来数据泄漏写法：第 t 根 K 线产生的信号只能使用 t 及之前的数据，实盘将在第 t+1 根 K 线开盘执行。
