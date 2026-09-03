@@ -132,10 +132,43 @@ async def calendar(
             }
         )
 
+    # —— 区间汇总（对齐 MT5 报告口径的聚合视图） ——
+    closed_total = sum(d["closed_count"] for d in result)
+    win_total = sum(d["win_count"] for d in result)
+    loss_total = sum(d["loss_count"] for d in result)
+    gw = round(sum(x["gross_win"] for x in days.values()), 2)
+    gl = round(sum(x["gross_loss"] for x in days.values()), 2)
+    agg_pnl = round(sum(d["total_pnl"] for d in result), 2)
+    # 日粒度近似回撤（每日已实现收益增量曲线；非 MT5 账户级 tick 口径——诚实标注）
+    cum = 0.0
+    peak = 0.0
+    max_dd = 0.0
+    for day in sorted(days):
+        cum += days[day]["realized_pnl"]
+        peak = max(peak, cum)
+        max_dd = max(max_dd, peak - cum)
+    summary = {
+        "closed_count": closed_total,
+        "win_count": win_total,
+        "loss_count": loss_total,
+        "win_rate": round(win_total / closed_total * 100, 1) if closed_total else None,
+        "gross_win": gw,
+        "gross_loss": gl,
+        "profit_factor": round(gw / gl, 2) if gl else None,
+        "avg_win": round(gw / win_total, 2) if win_total else None,
+        "avg_loss": round(gl / loss_total, 2) if loss_total else None,
+        "max_win": max((d["max_win"] or 0.0) for d in result) or None,
+        "max_loss": min((d["max_loss"] or 0.0) for d in result) or None,
+        "max_drawdown_usd": round(max_dd, 2),
+        "drawdown_note": "日粒度近似（每日已实现增量曲线），非 MT5 账户级回撤口径",
+        "pnl": agg_pnl,
+    }
+
     return {
         "date_from": date_from,
         "date_to": date_to,
         "floating_now": floating,
         "days": result,
-        "total": round(sum(d["total_pnl"] for d in result), 2),
+        "total": agg_pnl,
+        "summary": summary,
     }
