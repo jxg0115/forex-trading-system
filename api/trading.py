@@ -267,6 +267,8 @@ async def run_backtest(req: BacktestRunRequest, state=Depends(get_app_state)):
         "execution_delay_bars": delay_bars,
         "slippage_price": req.slippage_points * point,
         "sltp": state.sltp_policy.to_dict() if state.sltp_policy.enabled else None,
+        "system_filter": req.system_filter,
+        "dynamic_sltp": req.dynamic_sltp,
         **params,
     }
     if state.settings.backtest_engine == "vectorbt":

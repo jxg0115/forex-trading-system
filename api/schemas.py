@@ -37,6 +37,9 @@ class BacktestRunRequest(BaseModel):
     leverage: int = 30
     delay_ms: int = 0
     slippage_points: float = 0.0
+    # 方案A：系统决策层模拟（默认关闭，行为不变）
+    system_filter: dict[str, Any] | None = None  # direction/trend_ma/atr_ratio_max/atr_ratio_win/no_entry_hour/daily_loss_limit
+    dynamic_sltp: bool = False  # True 时回测逐 bar 用供给层动态档（与实盘同款合成器）
 
 
 class BacktestOptimizeRequest(BaseModel):

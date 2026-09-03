@@ -8,8 +8,26 @@ from typing import Any
 import numpy as np
 import pandas as pd
 
+import sys
+from pathlib import Path
+from types import SimpleNamespace
+
 from backtest_store.costs import calc_slippage, merge_costs
 from models.factor import BacktestMetrics, BacktestResult, TradeDetail
+
+# —— 供给层（与实盘 SltpPolicyManager 同款）：收益K线估计器 + 七档动态阈值合成 ——
+_EXIT_MANAGER_DIR = str(Path(__file__).resolve().parent.parent / "exit_manager")
+if _EXIT_MANAGER_DIR not in sys.path:
+    sys.path.insert(0, _EXIT_MANAGER_DIR)
+_SUPPLY_OK = False
+try:
+    from framework.profit_kline import BarConfig, ProfitKlineGenerator, Snapshot
+    from framework.estimators import EstimatorBundle
+    from framework.indicators import IndicatorSnapshot
+    from strategy.threshold_scheduler import ThresholdScheduler
+    _SUPPLY_OK = True
+except Exception:  # 供给层缺失 -> 动态档自动降级（诚实）
+    pass
 
 DEFAULT_PARAMS = {
     "atr_period": 14,
@@ -25,6 +43,9 @@ DEFAULT_PARAMS = {
     "spread_points": 0.0,   # 点差成本（价格点，如 EURUSD 5 位报价 10 点 = 1 pip）；0 = 不计
     "point_size": 0.0,      # 1 点的价格单位（EURUSD 0.0001 / JPY 0.01 / 黄金 0.1 / 指数&加密 1.0）
     "bars_per_year": 35_040,
+    # —— 方案A：系统决策层模拟（默认关闭，行为不变）——
+    "system_filter": None,   # dict: direction / trend_ma / atr_ratio_max / atr_ratio_win / no_entry_hour / daily_loss_limit
+    "dynamic_sltp": False,   # True 时用供给层动态档（与实盘同款合成器）
 }
 
 
@@ -88,6 +109,18 @@ class Backtester:
             hw_retrace_atr = 0.0
         commission = float(p["commission_pct"])
         delay_bars = max(int(p["execution_delay_bars"]), 0)
+
+        # —— 方案A 系统过滤参数 ——
+        system_filter = p.get("system_filter") or {}
+        filter_direction = str(system_filter.get("direction") or "both")
+        trend_ma = max(int(system_filter.get("trend_ma") or 0), 0)
+        atr_ratio_max = max(float(system_filter.get("atr_ratio_max") or 0.0), 0.0)
+        atr_ratio_win = max(int(system_filter.get("atr_ratio_win") or 40), 1)
+        no_entry_hour: set[int] = set(int(h) for h in (system_filter.get("no_entry_hour") or []))
+        daily_loss_limit = max(float(system_filter.get("daily_loss_limit") or 0.0), 0.0)
+        use_dynamic_sltp = bool(p.get("dynamic_sltp")) and _SUPPLY_OK
+        trend_line = df["close"].rolling(trend_ma).mean() if trend_ma > 0 else None
+        atr_base = atr.rolling(atr_ratio_win).mean() if atr_ratio_max > 0 else None
         leverage = max(float(p["leverage"]), 1.0)
         slippage = max(float(p["slippage_price"]), 0.0)
         spread_points = max(float(p.get("spread_points") or 0.0), 0.0)
@@ -98,6 +131,8 @@ class Backtester:
         equity_curve: list[dict[str, Any]] = []
         position: dict[str, Any] | None = None
         pending_entry: dict[str, Any] | None = None
+        cur_day = ""
+        day_realized = 0.0
 
         n = len(df)
 
@@ -114,7 +149,7 @@ class Backtester:
             take_price = entry_price + direction * stop_dist * tp_mult
             # 点差成本（按半差价折算：买高卖低各承担一半，更贴近真实成交）
             spread_pct = (spread_points * point_size / 2.0) / entry_price if entry_price and spread_points else 0.0
-            return {
+            pos_dict = {
                 "side": side,
                 "direction": direction,
                 "entry_time": df.index[i],
@@ -127,6 +162,13 @@ class Backtester:
                 "spread_pct": spread_pct,
                 "slippage": entry_slip,  # 出场成交滑点（与入场同口径，持仓期内固定）
             }
+            if use_dynamic_sltp:
+                # 动态档逐单状态（与实盘 SltpPolicyManager 同款构造）
+                pos_dict["_gen"] = ProfitKlineGenerator(BarConfig(threshold_r=0.25, max_seconds=900.0))
+                pos_dict["_est"] = EstimatorBundle()
+                pos_dict["_sch"] = ThresholdScheduler()
+                pos_dict["_est_n"] = 0
+            return pos_dict
 
         for i in range(n):
             o = float(df["open"].iloc[i])
@@ -134,15 +176,45 @@ class Backtester:
             l = float(df["low"].iloc[i])
             c = float(df["close"].iloc[i])
 
+            # 日熔断：按 bar 日期切换
+            d_key = ""
+            if hasattr(df.index[i], "date"):
+                d_key = str(df.index[i].date())
+            if d_key and d_key != cur_day:
+                cur_day = d_key
+                day_realized = 0.0
+
             if position is None and i > 0:
                 sig = float(entry.iloc[i - 1])
                 if sig != 0.0:
                     side = "long" if sig > 0 else "short"
                     direction = 1.0 if side == "long" else -1.0
-                    if delay_bars > 0:
-                        pending_entry = {"side": side, "direction": direction, "execute_at": i + delay_bars}
-                    else:
-                        position = _open_position(i, side, direction)
+                    # —— 方案A 系统决策层模拟：方向 / 趋势 / 波动 / 时段 / 日熔断（全部用上一根数据，无未来泄漏） ——
+                    if filter_direction not in ("both", side):
+                        sig = 0.0
+                    if sig != 0.0 and trend_line is not None:
+                        ma_prev = float(trend_line.iloc[i - 1])
+                        if math.isnan(ma_prev):
+                            sig = 0.0
+                        else:
+                            trend_up = float(df["close"].iloc[i - 1]) > ma_prev
+                            if (side == "long" and not trend_up) or (side == "short" and trend_up):
+                                sig = 0.0
+                    if sig != 0.0 and atr_base is not None:
+                        base = 0.0 if math.isnan(float(atr_base.iloc[i - 1])) else float(atr_base.iloc[i - 1])
+                        if base > 0 and float(atr.iloc[i - 1]) / base > atr_ratio_max:
+                            sig = 0.0
+                    if sig != 0.0 and no_entry_hour:
+                        last_ts = df.index[i - 1]
+                        if isinstance(last_ts, pd.Timestamp) and last_ts.hour in no_entry_hour:
+                            sig = 0.0
+                    if sig != 0.0 and daily_loss_limit > 0 and day_realized <= -daily_loss_limit:
+                        sig = 0.0
+                    if sig != 0.0:
+                        if delay_bars > 0:
+                            pending_entry = {"side": side, "direction": direction, "execute_at": i + delay_bars}
+                        else:
+                            position = _open_position(i, side, direction)
 
             if position is None and pending_entry is not None and i >= pending_entry["execute_at"]:
                 position = _open_position(i, pending_entry["side"], pending_entry["direction"])
@@ -165,8 +237,36 @@ class Backtester:
                     else:
                         position["peak"] = min(position["peak"], l)
                     peak_profit_r = (position["peak"] - entry_price) * direction / r_unit
-                    if ladder_enabled and ladder_tiers:
-                        for tier in ladder_tiers:
+                    dyn_tiers = ladder_tiers
+                    dyn_max_hold = max_hold
+                    dyn_hw_r = hw_activation_r
+                    if use_dynamic_sltp and position.get("_est") is not None:
+                        try:
+                            # 收益K线采样 -> 估计器 -> 七档动态合成（与实盘供给层同款，逐 bar 近似事件驱动）
+                            snap = Snapshot(ts=int(df.index[i].timestamp()), price=c, floating_r=peak_profit_r,
+                                            remaining_frac=1.0, direction=int(direction))
+                            committed = position["_gen"].on_snapshot(snap)
+                            if committed is not None:
+                                position["_est"].on_bar(committed)
+                                position["_est_n"] = int(position.get("_est_n") or 0) + 1
+                            ind_snap = IndicatorSnapshot(atr=atr_i, spread_pip=0.0, spread_pip_avg=0.0)
+                            est_out = position["_est"].snapshot(int(df.index[i].timestamp()), ind_snap)
+                            order_proxy = SimpleNamespace(
+                                dd_avg=0.3,  # V1：收益K线回撤近似常量（与实盘同款口径）
+                                hold_frac=min(position["bars_held"] / max(max_hold, 1), 1.0),
+                            )
+                            thr = position["_sch"].compute(est_out, order_proxy, ts=int(df.index[i].timestamp()))
+                            dyn_tiers = [
+                                {"trigger_r": round(float(thr.be_r), 3), "raise_to_r": 0.0},
+                                {"trigger_r": round(float(thr.partial1_r), 3), "raise_to_r": round(float(thr.be_r), 3)},
+                                {"trigger_r": round(float(thr.partial2_r), 3), "raise_to_r": round(float(thr.partial1_r), 3)},
+                            ]
+                            dyn_max_hold = int(thr.max_hold_bars)
+                            dyn_hw_r = round(float(thr.trail_start_r), 3)
+                        except Exception:
+                            pass  # 合成异常 -> 退回固定档（诚实降级）
+                    if ladder_enabled and dyn_tiers:
+                        for tier in dyn_tiers:
                             if peak_profit_r >= float(tier.get("trigger_r") or 0.0):
                                 ladder_stop = entry_price + direction * float(tier.get("raise_to_r") or 0.0) * r_unit
                                 if direction > 0:
@@ -191,7 +291,7 @@ class Backtester:
                     atr_i = float(atr.iloc[i]) if math.isfinite(float(atr.iloc[i])) else (abs(c - o) or 0.0001)
                     r_unit = max(sl_mult * atr_i, atr_i * 0.1)
                     peak_profit_r = (position["peak"] - entry_price) * direction / r_unit
-                    if peak_profit_r >= hw_activation_r:
+                    if peak_profit_r >= dyn_hw_r:
                         drawdown = (
                             (position["peak"] - l) / atr_i
                             if direction > 0
@@ -199,7 +299,7 @@ class Backtester:
                         )
                         if drawdown > hw_retrace_atr:
                             exit_price, reason = c - direction * position["slippage"], "高水位回落"
-                if exit_price is None and position["bars_held"] >= max_hold:
+                if exit_price is None and position["bars_held"] >= dyn_max_hold:
                     exit_price, reason = c - direction * position["slippage"], "超时平仓"
 
                 if exit_price is not None:
@@ -211,6 +311,7 @@ class Backtester:
                     trade_pnl_pct = net_pnl_pct * size_frac
                     equity_before_trade = equity
                     equity *= 1.0 + trade_pnl_pct
+                    day_realized += equity - equity_before_trade
 
                     trades.append(
                         TradeDetail(
