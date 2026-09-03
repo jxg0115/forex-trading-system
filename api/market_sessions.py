@@ -19,10 +19,11 @@ THURSDAY = 3
 FRIDAY = 4
 WEEKDAY_OPEN_DAYS = {MONDAY, TUESDAY, WEDNESDAY, THURSDAY, FRIDAY}
 
-# 每日休市窗口（分钟，[start, end) 区间，0<=start<end<=1440）
-DAILY_CLOSE_START_MIN = 21 * 60 + 59  # 21:59 UTC
-DAILY_CLOSE_END_MIN = 23 * 60  # 23:00 UTC
-DAILY_CLOSE_LABEL = "每日 21:59~23:00 UTC 休市窗口（换日维护）"
+# 每日休市窗口（分钟，[start, end) 区间，0<=start<end<=1440；支持跨午夜拆多段）
+# 2026-09-02→09-03 M5 实测缺口 22:55→01:00 UTC（单日样本，缓存补齐后复核）：
+# 实际换日维护窗口 ≈ 23:00~24:00 + 00:00~01:00 UTC（与默认 21:59~23:00 不符，已校准）
+DAILY_CLOSE_WINDOWS = [(23 * 60, 24 * 60), (0, 1 * 60)]  # 23:00~24:00 + 00:00~01:00 UTC
+DAILY_CLOSE_LABEL = "每日 23:00~24:00+00:00~01:00 UTC 休市窗口（换日维护，M5 实测校准）"
 
 
 def _utc_now() -> datetime:
@@ -38,7 +39,7 @@ def market_state(now: datetime | None = None) -> dict:
 
     weekday = now.weekday()
     minute_of_day = now.hour * 60 + now.minute
-    in_daily_close = DAILY_CLOSE_START_MIN <= minute_of_day < DAILY_CLOSE_END_MIN
+    in_daily_close = any(s <= minute_of_day < e for s, e in DAILY_CLOSE_WINDOWS)
     weekend = weekday not in WEEKDAY_OPEN_DAYS
 
     if weekend:
@@ -51,16 +52,13 @@ def market_state(now: datetime | None = None) -> dict:
         is_open = True
         session = "open"
 
-    # 下一收市时刻
+    # 下一收市时刻（最近一个未开始的休市窗口起点）
     next_close: datetime | None = None
     if is_open:
-        if minute_of_day < DAILY_CLOSE_START_MIN:
-            # 今日窗口尚未开始 -> 今日窗口开始即收市
-            next_close = now.replace(
-                hour=DAILY_CLOSE_START_MIN // 60,
-                minute=DAILY_CLOSE_START_MIN % 60,
-                second=0, microsecond=0,
-            )
+        upcoming = [s for s, e in DAILY_CLOSE_WINDOWS if minute_of_day < s]
+        if upcoming:
+            s = min(upcoming)
+            next_close = now.replace(hour=s // 60, minute=s % 60, second=0, microsecond=0)
         elif weekday == FRIDAY:
             # 已过今日窗口（周五开市段 23:00 之后）-> 本周末收市
             days_to_sat = 1
@@ -68,10 +66,10 @@ def market_state(now: datetime | None = None) -> dict:
                 hour=0, minute=0, second=0, microsecond=0
             )
         else:
-            # 已过今日窗口（周一~周四）-> 明日窗口开始
+            # 已过今日窗口（周一~周四）-> 明日首个窗口开始
             next_close = (now + timedelta(days=1)).replace(
-                hour=DAILY_CLOSE_START_MIN // 60,
-                minute=DAILY_CLOSE_START_MIN % 60,
+                hour=DAILY_CLOSE_WINDOWS[0][0] // 60,
+                minute=DAILY_CLOSE_WINDOWS[0][0] % 60,
                 second=0, microsecond=0,
             )
 
@@ -79,12 +77,20 @@ def market_state(now: datetime | None = None) -> dict:
     next_open: datetime | None = None
     if not is_open:
         if in_daily_close and not weekend:
-            # 每日窗口内 -> 今日窗口结束即开
-            next_open = now.replace(
-                hour=DAILY_CLOSE_END_MIN // 60,
-                minute=DAILY_CLOSE_END_MIN % 60,
-                second=0, microsecond=0,
-            )
+            # 每日窗口内 -> 当前窗口结束即开（跨午夜段按当前所在段取终点）
+            cur_end = next((e for s, e in DAILY_CLOSE_WINDOWS if s <= minute_of_day < e), None)
+            if cur_end is not None:
+                next_open = now.replace(
+                    hour=cur_end // 60,
+                    minute=cur_end % 60,
+                    second=0, microsecond=0,
+                )
+            else:  # 兜底：次日首窗口后
+                next_open = now.replace(
+                    hour=DAILY_CLOSE_WINDOWS[0][0] // 60,
+                    minute=DAILY_CLOSE_WINDOWS[0][0] % 60,
+                    second=0, microsecond=0,
+                ) + timedelta(days=1)
         else:
             # 周末闭市 -> 下周一 00:00 UTC
             days_to_mon = (7 - weekday) % 7

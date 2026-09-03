@@ -21,6 +21,7 @@ class EventUpsertRequest(BaseModel):
     title: str                        # 事件标题
     importance: str = "high"          # high / medium / low
     symbols: list[str] = ["GOLD", "EURUSD"]
+    direction: str = "neutral"        # bullish / bearish / neutral（事件方向；决策链 D3 禁单暂不依赖方向，为未来方向感知过滤预留）
     note: Optional[str] = None
 
 
