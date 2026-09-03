@@ -11,6 +11,14 @@ from __future__ import annotations
 from typing import Any
 
 
+def _is_strong_trend(market: dict[str, Any], conditions: dict[str, Any]) -> bool:
+    """强趋势判定（方案 C 豁免专用）：low_vol_min_adx>0 时 ADX 阈值优先（严格模式）；未配置时用分析 label 主判。"""
+    min_adx_low = float(conditions.get("low_vol_min_adx") or 0)
+    if min_adx_low > 0:
+        return float(market.get("adx") or 0.0) >= min_adx_low
+    return "强趋势" in str(market.get("label") or "")
+
+
 def matches_market_filter(conditions: dict[str, Any], market: dict[str, Any]) -> bool:
     """判定当前行情 market 是否满足开仓条件 conditions。"""
     if not conditions:
@@ -42,7 +50,14 @@ def matches_market_filter(conditions: dict[str, Any], market: dict[str, Any]) ->
     if isinstance(allowed_vol, str):
         allowed_vol = [allowed_vol]
     if allowed_vol and volatility not in allowed_vol:
-        return False
+        # 方案 C（2026-09-03 拍板）：低波动 + 强趋势确认才放行（默认开启；显式 False 回退旧行为）
+        # 强趋势判定=分析 label 含"强趋势"（主判）或 ADX 达 low_vol_min_adx（>0 时叠加）
+        if not (
+            bool(conditions.get("allow_low_vol_trend", True))
+            and volatility == "低波动"
+            and _is_strong_trend(market, conditions)
+        ):
+            return False
 
     allowed_volume = conditions.get("volume_state") or conditions.get("volume_states") or []
     if isinstance(allowed_volume, str):
