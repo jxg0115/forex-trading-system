@@ -13,6 +13,7 @@ import {
   FileText,
   FileClock,
   Layers,
+  MoreHorizontal,
   Play,
   Pencil,
   Power,
@@ -556,6 +557,8 @@ export default function App() {
   // 整页路由：由 URL hash 承载（#chart / #strategy / #perf / #system / #vpattern）
   const { page, go, navSeq } = useHashPage();
   const openVPatternPage = () => go(VPATTERN_HASH);
+  // 顶栏「更多」下拉菜单开关
+  const [moreOpen, setMoreOpen] = useState(false);
 
   // 跨页安全的子标签跳转：业务回调（如保存因子后跳回因子管理）可能从任意台触发，
   // 因此必须同时把整页切到目标台，否则内容渲染不出来。
@@ -2420,40 +2423,61 @@ export default function App() {
   return (
     <div className="app">
       <header className="topbar">
+        {/* 品牌 + 品种/周期：合并进一条顶栏，不再单独占一行 */}
         <div className="brand">
-          <span className="brand-mark"><Bot size={17} /></span>
-          外汇 AI 量化交易系统
+          <span className="brand-mark"><Bot size={16} /></span>
+          <span className="brand-text">外汇 AI 量化</span>
         </div>
-        <div className="select-wrap" title="交易所">
-          <select value={venue} onChange={(e) => setVenue(e.target.value as "mt5" | "okx")}>
-            <option value="mt5">MT5 外汇</option>
-            <option value="okx">OKX 加密</option>
-          </select>
+
+        <div className="topbar-symbol">
+          <div className="select-wrap" title="交易所">
+            <select value={venue} onChange={(e) => setVenue(e.target.value as "mt5" | "okx")}>
+              <option value="mt5">MT5</option>
+              <option value="okx">OKX</option>
+            </select>
+          </div>
+          <SymbolSearchSelect symbols={symbols} value={symbol} onChange={setSymbol} />
+          <div className="select-wrap">
+            <select value={timeframe} onChange={(e) => setTimeframe(e.target.value)}>
+              {TIMEFRAMES.map((t) => <option key={t} value={t}>{t}</option>)}
+            </select>
+          </div>
         </div>
-        <SymbolSearchSelect symbols={symbols} value={symbol} onChange={setSymbol} />
-        <div className="select-wrap">
-          <Activity size={13} />
-          <select value={timeframe} onChange={(e) => setTimeframe(e.target.value)}>
-            {TIMEFRAMES.map((t) => <option key={t} value={t}>{t}</option>)}
-          </select>
-        </div>
+
+        {/* 页面导航居中，与品牌条同高 */}
+        <nav className="topnav">
+          {PAGES.map((p) => (
+            <button
+              key={p.id}
+              className={`topnav-btn ${page === p.id ? "active" : ""}`}
+              title={p.hint}
+              onClick={() => {
+                const d = DEFAULT_TAB[p.id];
+                if (d) { setTab(d.tab as MainTab); if (d.sub) setSubTab(d.sub as SubTab); }
+                go(p.id);
+              }}
+            >
+              {p.label}
+            </button>
+          ))}
+          <button className="topnav-btn external" onClick={openVPatternPage} title="打开独立的 K 线形态交易页面">
+            <TrendingUp size={13} /> K线形态 ↗
+          </button>
+        </nav>
+
         <div className="topbar-spacer" />
-        <span className="status-pill"><span className={`dot ${systemState?.matcher_running ? "on" : ""}`} /> 实盘匹配 {systemState?.matcher_running ? "运行中" : "已暂停"}</span>
+
+        {/* 状态胶囊：只留最关键的 3 个，其余收进「更多」 */}
+        <span className="status-pill"><span className={`dot ${systemState?.matcher_running ? "on" : ""}`} /> 实盘 {systemState?.matcher_running ? "运行中" : "已暂停"}</span>
         <span className="status-pill"><span className={`dot ${systemState?.active_positions ? "warn" : ""}`} /> 持仓 {systemState?.active_positions ?? 0}</span>
         <span className="status-pill" title="实时行情：MT5 tick 推送（非轮询），Bid / Ask / 点差随每次 tick 更新">
-          <span className={`dot ${topTick?.bid ? "on" : ""}`} /> 行情{" "}
+          <span className={`dot ${topTick?.bid ? "on" : ""}`} />
           {topTick ? (
             <>
-              <span style={{ color: tickDir === "up" ? "#8e8" : tickDir === "down" ? "#e88" : "#ccc" }}>
-                {tickDir === "up" ? "▲ " : tickDir === "down" ? "▼ " : ""}
+              <span style={{ color: tickDir === "up" ? "var(--green)" : tickDir === "down" ? "var(--red)" : "var(--muted)" }}>
+                {tickDir === "up" ? "▲" : tickDir === "down" ? "▼" : ""}
               </span>
-              {topTick.bid.toFixed(topTick.bid >= 100 ? 2 : 5)} / {topTick.ask.toFixed(topTick.ask >= 100 ? 2 : 5)}
-              <span style={{ color: "#888" }}> · {topTick.spread_points}点</span>
-              {String((marketAnalysis?.multi_timeframe as Record<string, unknown> | undefined)?.consensus ?? "") && (
-                <span style={{ color: "#9be", marginLeft: 6 }}>
-                  {String((marketAnalysis?.multi_timeframe as Record<string, unknown> | undefined)?.consensus ?? "")}
-                </span>
-              )}
+              {topTick.bid.toFixed(topTick.bid >= 100 ? 2 : 5)}
             </>
           ) : (
             "实时"
@@ -2461,45 +2485,43 @@ export default function App() {
         </span>
         <span className={`status-pill ai-pill ${aiStatus?.enabled_count ? "ai-on" : aiStatus?.configured ? "ai-warn" : ""}`}>
           <span className={`dot ${aiStatus?.enabled_count ? "on" : aiStatus?.configured ? "warn" : ""}`} />
-          AI {aiStatus?.enabled_count ? `已配置 ${aiStatus.configs.find((c) => c.enabled)?.model ?? ""}` : aiStatus?.configured ? "未启用" : "未配置"}
+          AI {aiStatus?.enabled_count ? `${aiStatus.configs.find((c) => c.enabled)?.model ?? ""}` : aiStatus?.configured ? "未启用" : "未配置"}
         </span>
-        <span className="status-pill"><Wallet size={13} /> MT5 账户 {systemState?.account_login ?? "--"} 权益 ${(systemState?.account_equity ?? 0).toLocaleString(undefined, { minimumFractionDigits: 2 })}</span>
-        <button className={`btn ${systemState?.matcher_running ? "danger" : "primary"}`} onClick={handleMatcherToggle}>
-          {systemState?.matcher_running ? <StopCircle size={14} /> : <Play size={14} />}
-          {systemState?.matcher_running ? "暂停系统交易" : "启动实盘匹配"}
-        </button>
-        <button className="btn" onClick={() => setMatcherViewOpen(true)}><Eye size={14} /> 查看匹配参数</button>
-        <button className="btn danger" onClick={handleCloseAll}>
-          <Square size={14} /> 一键平仓
-        </button>
-        <button className="btn" disabled={busy} onClick={handleRestartSystem}>
-          <Power size={14} /> 重启系统
-        </button>
-        <button className="btn" onClick={() => setChatOpen(true)}>
-          <Bot size={14} /> AI 助手
-        </button>
-      </header>
+        <span className="status-pill" title={`MT5 账户 ${systemState?.account_login ?? "--"} 权益 $${(systemState?.account_equity ?? 0).toLocaleString(undefined, { minimumFractionDigits: 2 })}`}>
+          <Wallet size={12} /> ${(systemState?.account_equity ?? 0).toLocaleString(undefined, { maximumFractionDigits: 0 })}
+        </span>
 
-      <nav className="topnav">
-        {PAGES.map((p) => (
-          <button
-            key={p.id}
-            className={`topnav-btn ${page === p.id ? "active" : ""}`}
-            title={p.hint}
-            onClick={() => {
-              const d = DEFAULT_TAB[p.id];
-              if (d) { setTab(d.tab as MainTab); if (d.sub) setSubTab(d.sub as SubTab); }
-              go(p.id);
-            }}
-          >
-            {p.label}
+        {/* 账户/AI 详情与系统操作收进下拉菜单，避免顶栏按钮堆成一排 */}
+        <div className="topbar-actions">
+          <button className="btn primary" onClick={handleMatcherToggle}>
+            {systemState?.matcher_running ? <StopCircle size={13} /> : <Play size={13} />}
+            {systemState?.matcher_running ? "暂停交易" : "启动交易"}
           </button>
-        ))}
-        <div className="topnav-spacer" />
-        <button className="topnav-btn external" onClick={openVPatternPage} title="打开独立的 K 线形态交易页面">
-          <TrendingUp size={14} /> K线形态 ↗
-        </button>
-      </nav>
+          <button className="btn" onClick={() => setMoreOpen((v) => !v)} title="更多操作">
+            <MoreHorizontal size={14} />
+          </button>
+          {moreOpen && (
+            <>
+              <div className="menu-backdrop" onClick={() => setMoreOpen(false)} />
+              <div className="dropdown-menu">
+                <button className="menu-item" onClick={() => { setMoreOpen(false); setMatcherViewOpen(true); }}>
+                  <Eye size={13} /> 查看匹配参数
+                </button>
+                <button className="menu-item" onClick={() => { setMoreOpen(false); handleCloseAll(); }}>
+                  <Square size={13} /> 一键平仓
+                </button>
+                <button className="menu-item" disabled={busy} onClick={() => { setMoreOpen(false); handleRestartSystem(); }}>
+                  <Power size={13} /> 重启系统
+                </button>
+                <div className="menu-sep" />
+                <button className="menu-item" onClick={() => { setMoreOpen(false); setChatOpen(true); }}>
+                  <Bot size={13} /> AI 助手
+                </button>
+              </div>
+            </>
+          )}
+        </div>
+      </header>
 
       {page === "chart" && (
         <ChartDesk
@@ -2540,29 +2562,45 @@ export default function App() {
       )}
 
       {page !== "chart" && (
+      <div className="page page-wide">
+      <div className="page-head">
+        {page === "strategy" && (<><Bot size={15} /> <strong>策略台</strong> <span>因子工作台 · 因子挖掘 · 交易中心</span></>)}
+        {page === "perf" && (<><FileText size={15} /> <strong>绩效台</strong> <span>复盘 · 因子统计 · 订单日志 · 收益日历</span></>)}
+        {page === "system" && (<><Cpu size={15} /> <strong>系统台</strong> <span>AI 管理 · 告警 · 系统操作</span></>)}
+      </div>
+
       <div className="main">
 
         <aside className="sidebar" style={{ width: "100%", flexBasis: "auto" }}>
           <div className="tabs">
             {page === "strategy" && (<>
+              <span className="tab-group">因子</span>
               <button className={`tab ${tab === "factors" && subTab === "mark" ? "active" : ""}`} onClick={() => { setTab("factors"); setSubTab("mark"); }}><Bot size={14} /> 形态标注</button>
               <button className={`tab ${tab === "factors" && subTab === "backtest" ? "active" : ""}`} onClick={() => { setTab("factors"); setSubTab("backtest"); }}><TestTube2 size={14} /> 回测与优化</button>
               <button className={`tab ${tab === "factors" && subTab === "manage" ? "active" : ""}`} onClick={() => { setTab("factors"); setSubTab("manage"); }}><Layers size={14} /> 因子管理</button>
               <button className={`tab ${tab === "mining" ? "active" : ""}`} onClick={() => setTab("mining")}><Radar size={14} /> 因子挖掘</button>
+              <span className="tab-sep" />
+              <span className="tab-group">交易</span>
               <button className={`tab ${tab === "trading" && subTab === "signals" ? "active" : ""}`} onClick={() => { setTab("trading"); setSubTab("signals"); }}><Activity size={14} /> 信号与执行</button>
               <button className={`tab ${tab === "trading" && subTab === "mt5" ? "active" : ""}`} onClick={() => { setTab("trading"); setSubTab("mt5"); }}><Wallet size={14} /> 实盘下单</button>
               <button className={`tab ${tab === "trading" && subTab === "sltp" ? "active" : ""}`} onClick={() => { setTab("trading"); setSubTab("sltp"); }}><Shield size={14} /> 止损止盈</button>
               <button className={`tab ${tab === "trading" && subTab === "okx-setup" ? "active" : ""}`} onClick={() => { setTab("trading"); setSubTab("okx-setup"); }}><Cable size={14} /> 欧易 API</button>
             </>)}
             {page === "perf" && (<>
+              <span className="tab-group">回顾</span>
               <button className={`tab ${tab === "replay" && subTab === "replay" ? "active" : ""}`} onClick={() => { setTab("replay"); setSubTab("replay"); }}><FileText size={14} /> 复盘</button>
               <button className={`tab ${tab === "replay" && subTab === "stats" ? "active" : ""}`} onClick={() => { setTab("replay"); setSubTab("stats"); }}><BarChart3 size={14} /> 因子统计</button>
+              <button className={`tab ${tab === "calendar" ? "active" : ""}`} onClick={() => setTab("calendar")}><Calendar size={14} /> 收益日历</button>
+              <span className="tab-sep" />
+              <span className="tab-group">订单</span>
               <button className={`tab ${tab === "replay" && subTab === "orders" ? "active" : ""}`} onClick={() => { setTab("replay"); setSubTab("orders"); }}><FileClock size={14} /> 订单日志</button>
               <button className={`tab ${tab === "replay" && subTab === "optimize" ? "active" : ""}`} onClick={() => { setTab("replay"); setSubTab("optimize"); }}><Bot size={14} /> 订单优化</button>
-              <button className={`tab ${tab === "calendar" ? "active" : ""}`} onClick={() => setTab("calendar")}><Calendar size={14} /> 收益日历</button>
             </>)}
             {page === "system" && (
-              <button className="tab active"><Cpu size={14} /> AI 管理</button>
+              <>
+                <span className="tab-group">配置</span>
+                <button className="tab active"><Cpu size={14} /> AI 管理</button>
+              </>
             )}
           </div>
 
@@ -3421,14 +3459,7 @@ export default function App() {
           </div>
         </aside>
       </div>
-      )}
-
-      {page !== "chart" && (
-        <div className="page-head">
-          {page === "strategy" && (<><Bot size={14} /> <strong>策略台</strong> <span>· 因子工作台 / 因子挖掘 / 交易中心</span></>)}
-          {page === "perf" && (<><FileText size={14} /> <strong>绩效台</strong> <span>· 复盘 / 因子统计 / 订单日志 / 收益日历</span></>)}
-          {page === "system" && (<><Cpu size={14} /> <strong>系统台</strong> <span>· AI 管理 / 告警 / 系统操作</span></>)}
-        </div>
+      </div>
       )}
 
       <div className="status-strip">

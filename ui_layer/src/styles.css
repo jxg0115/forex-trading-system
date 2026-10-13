@@ -1050,21 +1050,92 @@ input:focus {
 }
 
 /* ==========================================================================
-   整页导航（四台 + K 线形态独立页）
-   新增样式，不改动上方任何既有类，保证旧侧边栏仍可按原样渲染（双轨期）。
+   整页导航 v2（2026-10-14 第二轮改版）
+   目标：去掉"双头"、把品牌/品种/导航/状态压进一条顶栏；页面标题回到顶部；
+        内容区左右留白收拢（不再内容贴左、右边空一大片）。
+   仅新增/覆盖本段内的类，上方既有类不动。
    ========================================================================== */
 
-.topnav {
+/* ---------- 顶栏：品牌 + 品种 + 导航 + 状态 + 操作，单行 ---------- */
+.topbar {
+  display: flex;
+  align-items: center;
+  flex-wrap: nowrap;
+  gap: 8px;
+  height: 52px;
+  min-height: 52px;
+  padding: 0 12px;
+  background: var(--bg-2);
+  border-bottom: 1px solid var(--line);
+  flex: 0 0 auto;
+  overflow: hidden;
+}
+
+.brand {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text);
+  flex: 0 0 auto;
+  white-space: nowrap;
+}
+
+.brand-text {
+  white-space: nowrap;
+}
+
+.brand-mark {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 26px;
+  height: 26px;
+  border-radius: 7px;
+  background: linear-gradient(135deg, rgba(46, 204, 154, 0.22), rgba(74, 163, 223, 0.18));
+  border: 1px solid rgba(46, 204, 154, 0.35);
+  color: var(--green);
+  flex: 0 0 auto;
+}
+
+/* 品种/周期选择组：收在一个小圆角容器里，视觉上成为一体 */
+.topbar-symbol {
   display: flex;
   align-items: center;
   gap: 6px;
-  padding: 0 14px;
-  height: 42px;
+  padding: 3px 6px;
+  margin-left: 4px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
   background: var(--bg);
-  border-bottom: 1px solid var(--line);
-  flex: 0 0 auto;
+  flex: 0 1 auto;
+  min-width: 0;
+}
+
+.topbar-symbol select {
+  height: 24px;
+  font-size: 12px;
+  padding: 0 4px;
+}
+
+/* 导航：紧跟品种组，居中偏左；不再独占一行、不再有独立底色 */
+.topnav {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  height: auto;
+  padding: 0;
+  background: transparent;
+  border-bottom: none;
+  flex: 0 1 auto;
+  min-width: 0;
   overflow-x: auto;
-  scrollbar-width: thin;
+  scrollbar-width: none;
+}
+
+.topnav::-webkit-scrollbar {
+  display: none;
 }
 
 .topnav-btn {
@@ -1072,8 +1143,8 @@ input:focus {
   align-items: center;
   gap: 6px;
   height: 30px;
-  padding: 0 14px;
-  border-radius: 6px;
+  padding: 0 12px;
+  border-radius: 7px;
   border: 1px solid transparent;
   background: transparent;
   color: var(--muted);
@@ -1091,28 +1162,23 @@ input:focus {
 .topnav-btn.active {
   color: var(--text);
   background: var(--panel-2);
-  border-color: var(--line);
+  border-color: rgba(46, 204, 154, 0.4);
   font-weight: 600;
 }
 
 .topnav-btn.active::before {
   content: "";
   width: 3px;
-  height: 14px;
+  height: 13px;
   border-radius: 2px;
   background: var(--green);
-  margin-right: 2px;
-}
-
-/* K 线形态独立页入口：靠右、带外跳箭头语义 */
-.topnav-spacer {
-  flex: 1;
-  min-width: 8px;
+  margin-right: 1px;
 }
 
 .topnav-btn.external {
   border-color: var(--line);
   color: var(--blue);
+  margin-left: 6px;
 }
 
 .topnav-btn.external:hover {
@@ -1120,7 +1186,92 @@ input:focus {
   background: rgba(74, 163, 223, 0.1);
 }
 
-/* 整页容器：每台页面独立滚动，不挤压顶栏 */
+.topnav-spacer {
+  flex: 1;
+  min-width: 6px;
+}
+
+/* 顶栏右侧：状态胶囊 + 操作按钮 */
+.topbar-spacer {
+  flex: 1;
+  min-width: 6px;
+}
+
+.topbar .status-pill {
+  flex: 0 0 auto;
+  white-space: nowrap;
+}
+
+.topbar-actions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex: 0 0 auto;
+  position: relative;
+}
+
+.topbar-actions .btn {
+  height: 30px;
+  font-size: 12px;
+  padding: 0 11px;
+}
+
+/* 「更多」下拉 */
+.menu-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 60;
+}
+
+.dropdown-menu {
+  position: absolute;
+  top: calc(100% + 6px);
+  right: 0;
+  z-index: 61;
+  min-width: 168px;
+  padding: 5px;
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 9px;
+  box-shadow: 0 10px 26px rgba(0, 0, 0, 0.45);
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+
+.menu-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  height: 32px;
+  padding: 0 9px;
+  border: none;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--text);
+  font-size: 12.5px;
+  text-align: left;
+  cursor: pointer;
+  white-space: nowrap;
+  width: 100%;
+}
+
+.menu-item:hover {
+  background: var(--panel-2);
+}
+
+.menu-item:disabled {
+  color: var(--muted);
+  cursor: not-allowed;
+}
+
+.menu-sep {
+  height: 1px;
+  background: var(--line);
+  margin: 4px 2px;
+}
+
+/* ---------- 页面容器：标题在最上，内容撑满 ---------- */
 .page {
   flex: 1;
   min-height: 0;
@@ -1129,30 +1280,187 @@ input:focus {
   overflow: hidden;
 }
 
-.page-body {
-  flex: 1;
-  min-height: 0;
-  overflow-y: auto;
-  padding: 12px 14px 20px;
-  display: flex;
-  flex-direction: column;
-  gap: 12px;
-}
-
-/* 页面标题条（每台页面顶部一句话说明） */
+/* 页面标题条：紧贴顶栏之下，一条细的上下文说明 */
 .page-head {
   display: flex;
   align-items: center;
-  gap: 8px;
-  padding: 10px 14px;
+  gap: 9px;
+  padding: 9px 18px;
   background: var(--bg-2);
   border-bottom: 1px solid var(--line);
   flex: 0 0 auto;
-  font-size: 13px;
+  font-size: 12.5px;
   color: var(--muted);
+  min-height: 38px;
 }
 
 .page-head strong {
   color: var(--text);
   font-size: 14px;
+  font-weight: 600;
+}
+
+.page-head svg {
+  color: var(--green);
+  flex: 0 0 auto;
+}
+
+/* ---------- 内容区：左右留白收拢，不再贴左空右 ---------- */
+.main {
+  display: flex;
+  flex: 1;
+  min-height: 0;
+  width: 100%;
+  padding: 0;
+}
+
+/* 只有"内容型"页面（策略/绩效/系统台）才限宽居中；
+   看盘台不限宽，K 线图与状态栏要铺满整个屏幕。 */
+.page-wide .main {
+  max-width: 1560px;
+  margin: 0 auto;
+}
+
+/* 非看盘台的页面：侧栏即主内容，改回纵向、限宽居中。
+   注意必须用 .page-wide 限定，否则会误伤看盘台（它的 aside.sidebar 也是 .main 直接子元素，
+   一旦被拉成 flex:1 就会把 K 线图挤没）。 */
+.page-wide .main > aside.sidebar {
+  width: 100%;
+  flex: 1 1 auto;
+  max-width: none;
+  background: var(--bg);
+  min-height: 0;
+  min-width: 0;
+}
+
+/* ---------- 选项卡：分组 + 加大点击区 + 明确选中态 ---------- */
+.tabs {
+  display: flex;
+  align-items: center;
+  gap: 3px;
+  padding: 8px 16px 0;
+  border-bottom: 1px solid var(--line);
+  background: var(--bg-2);
+  flex: 0 0 auto;
+  overflow-x: auto;
+  scrollbar-width: none;
+}
+
+.tabs::-webkit-scrollbar {
+  display: none;
+}
+
+/* 分组标签（如「因子」「交易」）：纯文字小标题，不可点 */
+.tab-group {
+  display: inline-flex;
+  align-items: center;
+  height: 34px;
+  padding: 0 4px 0 8px;
+  font-size: 11px;
+  letter-spacing: 0.5px;
+  color: var(--muted);
+  opacity: 0.75;
+  flex: 0 0 auto;
+  user-select: none;
+}
+
+.tab-group:first-child {
+  padding-left: 2px;
+}
+
+/* 分组之间的竖向细线 */
+.tab-sep {
+  width: 1px;
+  height: 18px;
+  margin: 0 8px;
+  background: var(--line);
+  flex: 0 0 auto;
+}
+
+.tabs .tab,
+.tab {
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  height: 34px;
+  padding: 0 14px;
+  border: 1px solid transparent;
+  border-radius: 7px 7px 0 0;
+  background: transparent;
+  color: var(--muted);
+  font-size: 12.5px;
+  cursor: pointer;
+  white-space: nowrap;
+  position: relative;
+  bottom: -1px;
+  transition: color 0.15s, background 0.15s;
+  border-bottom: none;
+}
+
+.tabs .tab:hover,
+.tab:hover {
+  color: var(--text);
+  background: var(--panel);
+}
+
+.tabs .tab.active,
+.tab.active {
+  color: var(--text);
+  background: var(--bg);
+  border-color: var(--line);
+  border-bottom: 1px solid var(--bg);
+  font-weight: 600;
+}
+
+.tabs .tab.active::after,
+.tab.active::after {
+  content: "";
+  position: absolute;
+  left: 0;
+  right: 0;
+  top: -1px;
+  height: 2px;
+  border-radius: 0 0 2px 2px;
+  background: var(--green);
+}
+
+/* 面板内容：与选项卡同宽，左右呼吸感一致 */
+.panel-body {
+  flex: 1;
+  overflow-y: auto;
+  padding: 16px 18px 28px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+/* 内容块再宽一点、说明文字再清楚一点，避免"空态一行字漂在巨大空白里" */
+.panel-body .tool-block {
+  max-width: none;
+}
+
+/* 空态：不要 margin:auto 垂直居中（会在内容少的页面上漂在正中央显得空），
+   改为顶部留白，视觉上"紧跟标题往下"。 */
+.panel-body .empty {
+  margin: 0;
+  padding: 52px 0;
+  text-align: center;
+  color: var(--muted);
+  font-size: 13px;
+  background: repeating-linear-gradient(
+    45deg,
+    transparent,
+    transparent 10px,
+    rgba(255, 255, 255, 0.012) 10px,
+    rgba(255, 255, 255, 0.012) 20px
+  );
+  border: 1px dashed var(--line);
+  border-radius: var(--radius);
+}
+
+/* 内容页里的小徽章/状态条不要被拉满整行（如系统台"负责板块"列） */
+.panel-body .badge {
+  align-self: flex-start;
 }

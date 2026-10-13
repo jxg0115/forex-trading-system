@@ -109,7 +109,7 @@ export function ChartDesk(props: ChartDeskProps) {
   return (
     <div className="page">
       <div className="page-head">
-        <Activity size={14} /> <strong>看盘台</strong> · K 线图 / 形态标注 / 实时状态
+        <Activity size={15} /> <strong>看盘台</strong> <span>K 线图 · 形态标注 · 实时状态</span>
       </div>
 
       <div className="main">
