@@ -6,6 +6,7 @@ import {
   Play,
   RefreshCw,
   Send,
+  ShieldCheck,
   Square,
   XCircle,
 } from "lucide-react";
@@ -169,6 +170,24 @@ export function Mt5Panel({ symbol, timeframe }: Props) {
     }
   }, [form.symbol, form.risk_percent, form.sl_pips]);
 
+  const suggestSltp = useCallback(async () => {
+    setBusy(true);
+    try {
+      const side = form.action_type.startsWith("BUY") ? "buy" : "sell";
+      const entry = form.price ? Number(form.price) : undefined;
+      const res = await api.mt5SuggestSltp(form.symbol, side, entry);
+      setForm((f) => ({ ...f, sl: String(res.data.sl), tp: String(res.data.tp) }));
+      setMsg({
+        type: "success",
+        text: `已按系统口径填入：止损 ${res.data.sl} / 止盈 ${res.data.tp}（盈亏比约 1:${res.data.reward_risk_ratio ?? "?"}，按参考价 ${res.data.reference_price}、ATR ${res.data.atr} 计算，可再手动调整）`,
+      });
+    } catch (err) {
+      setMsg({ type: "error", text: String(err instanceof Error ? err.message : err) });
+    } finally {
+      setBusy(false);
+    }
+  }, [form.action_type, form.price, form.symbol]);
+
   const closePosition = useCallback(async (ticket: number) => {
     try {
       await api.mt5Close(ticket);
@@ -176,6 +195,20 @@ export function Mt5Panel({ symbol, timeframe }: Props) {
       await loadAll();
     } catch (err) {
       setMsg({ type: "error", text: String(err instanceof Error ? err.message : err) });
+    }
+  }, [loadAll]);
+
+  const applySuggestedSltp = useCallback(async (ticket: number) => {
+    setBusy(true);
+    try {
+      const res = await api.mt5ApplySuggestedSltp(ticket);
+      const s = res.data.suggestion as { sl?: number; tp?: number };
+      setMsg({ type: "success", text: `持仓 #${ticket} 已按系统口径补挂：止损 ${s.sl} / 止盈 ${s.tp}` });
+      await loadAll();
+    } catch (err) {
+      setMsg({ type: "error", text: String(err instanceof Error ? err.message : err) });
+    } finally {
+      setBusy(false);
     }
   }, [loadAll]);
 
@@ -326,6 +359,7 @@ export function Mt5Panel({ symbol, timeframe }: Props) {
           </div>
         <div className="row-actions" style={{ marginTop: 8 }}>
           <button className="mini-btn primary" disabled={busy || !status?.connected} onClick={sendOrder}><Play size={12} /> 发送订单</button>
+          <button className="mini-btn" disabled={busy || !status?.connected} onClick={suggestSltp} title="按系统兜底口径（SL=1.5×ATR、TP=2R）自动填入止损止盈"><Calculator size={12} /> 建议止损止盈</button>
         </div>
       </div>
 
@@ -357,6 +391,9 @@ export function Mt5Panel({ symbol, timeframe }: Props) {
                 <div><div className="t-label">{p.symbol} {p.type === "BUY" ? "买入" : "卖出"}</div><div className="t-value">{p.volume} 手 @ {p.price_open.toFixed(5)}</div></div>
                 <div><div className="t-label">浮动盈亏</div><div className={`t-value ${p.profit >= 0 ? "pnl-pos" : "pnl-neg"}`}>{p.profit >= 0 ? "+" : ""}{p.profit.toFixed(2)}</div></div>
                 <div><div className="t-label">止损/止盈</div><div className="t-value">{p.sl ? p.sl.toFixed(5) : "--"} / {p.tp ? p.tp.toFixed(5) : "--"}</div></div>
+                {(!p.sl || !p.tp) && (
+                  <button className="mini-btn" disabled={busy} onClick={() => applySuggestedSltp(p.ticket)} title="按系统兜底口径（SL=1.5×ATR、TP=2R）为该持仓补挂止损止盈"><ShieldCheck size={12} /> 补挂止损止盈</button>
+                )}
                 <button className="mini-btn danger" onClick={() => closePosition(p.ticket)}>平仓</button>
               </div>
             ))}

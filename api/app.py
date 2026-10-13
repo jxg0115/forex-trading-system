@@ -16,11 +16,15 @@ from fastapi.staticfiles import StaticFiles
 from ai_engine.factor_generator import FactorGenerator
 from ai_engine.ai_manager import AiManager
 from ai_engine.model_pool import ModelPool
-from api import ai, analytics, chat, events, factors, indicators, market, mining, models, mt5, observability, patterns, tick_archive, trading, webhook
+# 注意：create_app 的形参名也叫 broker，故此处用别名导入，避免被遮蔽
+from api import ai, analytics, chat, events, factors, indicators, market, mining, models, mt5, observability, patterns, tick_archive, trading, vpattern, webhook
+from api import broker as broker_api
+from api import okx_settings
 from backtest_store.repository import FactorRepository, get_repository
 from config import settings
 from market_data.service import MarketDataService
 from market_data.market_analysis import MarketAnalysisEngine
+from market_data.symbol_registry import SymbolRegistry, VENUE_MT5, VENUE_OKX
 from observability.notifier import Notifier
 from tools.factor_export import backup_db, export_json
 from oems.mt5_broker import MT5Broker
@@ -48,6 +52,8 @@ class AppState:
     notifier: Notifier = field(default_factory=Notifier)
     orders: OrderManager = field(init=False)
     mt5_gateway: MT5Gateway | None = field(init=False, default=None)
+    okx_gateway: Any | None = field(init=False, default=None)
+    registry: SymbolRegistry | None = field(init=False, default=None)
     pending_mgr: PendingExpirationManager | None = field(init=False, default=None)
     mt5_was_connected: bool | None = field(init=False, default=None)
     last_mt5_retry: float = 0.0
@@ -84,6 +90,8 @@ class AppState:
     risk_tripped: bool = False
     risk_tripped_warned: bool = False
     risk_reasons: list[str] = field(default_factory=list)
+    # K 线形态独立交易模块（自带仓位/风控，不经过 SignalExecutor，故不受镜像开关影响）
+    vpattern: Any | None = field(init=False, default=None)
 
     def __post_init__(self) -> None:
         effective_broker = self.broker_override or settings.broker
@@ -93,9 +101,23 @@ class AppState:
                 mt5_broker.gateway.connect()
             self.mt5_gateway = mt5_broker.gateway
             self.orders = OrderManager(mt5_broker, self.notifier)
+        elif effective_broker == "okx":
+            from oems.okx_broker import OkxBroker
+
+            self.okx_gateway = self._build_okx_gateway()
+            self.orders = OrderManager(OkxBroker(self.okx_gateway), self.notifier)
         else:
             self.orders = OrderManager(PaperBroker(), self.notifier)
-        self.market = MarketDataService(self.mt5_gateway)
+
+        # 行情网关：OKX 可单独启用并与 MT5 并存，由 SymbolRegistry 按 symbol 路由
+        if self.okx_gateway is None and (settings.okx_enable or effective_broker == "okx"):
+            self.okx_gateway = self._build_okx_gateway()
+        force_venue = None if settings.venue_mode == "route" else settings.venue_mode
+        self.registry = SymbolRegistry(
+            gateways={VENUE_MT5: self.mt5_gateway, VENUE_OKX: self.okx_gateway},
+            force_venue=force_venue,
+        )
+        self.market = MarketDataService(self.mt5_gateway, self.registry)
         self.market_analysis = MarketAnalysisEngine(self.market)
         self.pending_mgr = PendingExpirationManager(self.mt5_gateway, self.notifier) if self.mt5_gateway else None
         self.paper = PaperTradingService(self.market, self.repository, self.orders)
@@ -148,6 +170,52 @@ class AppState:
             else None
         )
         self.paper.trailing_config = self.signal_executor.config
+
+        # K 线形态独立模块：仅 MT5 通道可用；用户开关状态从库中恢复（重启后自动续跑）
+        if self.mt5_gateway:
+            from signals.vpattern import VPatternConfig, VPatternEngine
+
+            saved = self.repository.get_vpattern_state()
+            vp_cfg = VPatternConfig.from_dict((saved or {}).get("config"))
+            # 保留用户上次的开关：上次开着就继续开（用户要求"保留现有运行状态"）。
+            # 跨日运行时重置当日计数，避免把昨天的连亏/日亏带进今天。
+            if not (saved or {}).get("enabled"):
+                vp_cfg.enabled = False
+            vp_cfg.day = ""
+            vp_cfg.day_pnl = 0.0
+            vp_cfg.day_halted = False
+            self.vpattern = VPatternEngine(
+                self.market,
+                self.orders,
+                self.mt5_gateway,
+                self.repository,
+                self.notifier,
+                vp_cfg,
+            )
+            try:
+                self.repository.save_vpattern_state(vp_cfg.to_dict(), enabled=vp_cfg.enabled)
+            except Exception:
+                pass
+
+    @staticmethod
+    def _build_okx_gateway() -> Any:
+        """构造 OKX 网关；连接失败不阻断启动（前端会显示未连接）。"""
+        from oems.okx_gateway import OkxGateway
+
+        gw = OkxGateway(
+            api_key=settings.okx_api_key,
+            secret=settings.okx_secret_key,
+            passphrase=settings.okx_passphrase,
+            flag=settings.okx_flag,
+            td_mode=settings.okx_td_mode,
+            pos_side_mode=settings.okx_pos_side_mode,
+            proxy_url=(settings.okx_proxy_url or None) if settings.okx_proxy_url != "direct" else "",
+        )
+        try:
+            gw.connect()
+        except Exception as exc:  # noqa: BLE001
+            print(f"[okx] 启动连接失败（不阻断启动）：{exc}")
+        return gw
 
 
 async def _system_loop(state: AppState) -> None:
@@ -276,6 +344,13 @@ async def _system_loop(state: AppState) -> None:
                         await state.sltp_manager.update(state.sltp_policy)
                     except Exception:
                         await asyncio.sleep(0)
+            # K 线形态独立模块：自带仓位/风控，与主系统并行、互不干扰
+            if state.vpattern is not None and state.vpattern.config.enabled:
+                if state.vpattern.should_scan(60.0):
+                    try:
+                        await state.vpattern.step()
+                    except Exception:
+                        await asyncio.sleep(0)
             await asyncio.sleep(settings.market_tick_ms / 1000.0)
         except asyncio.CancelledError:
             break
@@ -371,6 +446,8 @@ def create_app(broker: str | None = None) -> FastAPI:
     app.include_router(trading.router)
     app.include_router(observability.router)
     app.include_router(mt5.router)
+    app.include_router(broker_api.router)
+    app.include_router(okx_settings.router)
     app.include_router(indicators.router)
     app.include_router(models.router)
     app.include_router(patterns.router)
@@ -378,6 +455,7 @@ def create_app(broker: str | None = None) -> FastAPI:
     app.include_router(events.router)
     app.include_router(tick_archive.router)
     app.include_router(webhook.router)
+    app.include_router(vpattern.router)
 
     dist_dir = __import__("pathlib").Path(__file__).resolve().parents[1] / "ui_layer" / "dist"
     if dist_dir.exists():

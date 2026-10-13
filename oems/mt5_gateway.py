@@ -160,7 +160,28 @@ class MT5Gateway:
         point = symbol_info.point
         tick_size = symbol_info.trade_tick_size if symbol_info.trade_tick_size > 0 else point
         tick_value = symbol_info.trade_tick_value
-        pip_value = (tick_value / tick_size) * (point * 10 if symbol_info.digits in (3, 5) else point)
+        contract_size = symbol_info.trade_contract_size
+        # 一个 pip 对应的价格单位：3/5 位报价是 10 个 point，2/4 位报价是 1 个 point
+        pip_size = point * 10 if symbol_info.digits in (3, 5) else point
+
+        # 券商上报的 trade_tick_value 不一定与 contract_size 自洽。
+        # 实测 XAUUSD：contract_size=100、tick_size=0.01 → 每 tick 应为 100×0.01=1.0 美元，
+        # 但券商上报 tick_value=0.1，整整差 10 倍。若直接采信，手数会被放大 10 倍，
+        # 每笔实际风险变成配置值的 10 倍（历史 84 笔样本：中位 6 倍、最高 17 倍）。
+        # 因此以 contract_size 反推为基准，仅在两者分歧超过 5% 时纠正。
+        pip_value = (tick_value / tick_size) * pip_size
+        by_contract = contract_size * pip_size  # 以「利润币种」计价的每 pip 价值
+        if by_contract > 0 and abs(pip_value - by_contract) > by_contract * 0.05:
+            account_ccy = self._account_currency(mt5)
+            profit_ccy = getattr(symbol_info, "currency_profit", "") or ""
+            if not profit_ccy or profit_ccy == account_ccy:
+                # 利润币种与账户币种一致（或取不到），合约口径可直接用
+                pip_value = by_contract
+            else:
+                # 交叉盘需要把利润币种折成账户币种，取不到汇率就保留券商口径
+                rate = self._fx_rate(mt5, profit_ccy, account_ccy)
+                if rate and rate > 0:
+                    pip_value = by_contract * rate
 
         return {
             "symbol": symbol,
@@ -176,6 +197,30 @@ class MT5Gateway:
             "pip_value": pip_value if pip_value > 0 else 10.0,
             "filling_mode": symbol_info.filling_mode,
         }
+
+    @staticmethod
+    def _account_currency(mt5) -> str:
+        """账户结算币种，取不到时返回空串（调用方按「同币种」处理）。"""
+        try:
+            info = mt5.account_info()
+            return (getattr(info, "currency", "") or "") if info else ""
+        except Exception:
+            return ""
+
+    @staticmethod
+    def _fx_rate(mt5, from_ccy: str, to_ccy: str) -> float:
+        """把利润币种折成账户币种：优先取 FROMTO，其次取 TOFROM 取倒数。"""
+        if not from_ccy or not to_ccy or from_ccy == to_ccy:
+            return 1.0
+        for name, invert in ((f"{from_ccy}{to_ccy}", False), (f"{to_ccy}{from_ccy}", True)):
+            try:
+                tick = mt5.symbol_info_tick(name)
+                price = getattr(tick, "bid", 0) if tick else 0
+                if price and price > 0:
+                    return (1.0 / price) if invert else float(price)
+            except Exception:
+                continue
+        return 0.0
 
     def get_tick(self, symbol: str) -> Optional[dict[str, Any]]:
         """获取品种最新 Bid/Ask、点差与盘口信息（板块二）。"""

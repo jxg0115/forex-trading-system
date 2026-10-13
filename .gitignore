@@ -30,3 +30,20 @@ package_dist/
 build_pyinstaller/
 tmp_analysis/
 runtime/
+
+# 运行日志与缓存数据
+data/*.log
+data/crypto/
+data/*.txt
+data/*.db.bak
+*.log
+*.pid
+
+# 工作目录（诊断脚本/调试日志/记忆笔记，含敏感文件）
+.workbuddy/
+
+# 前端构建产物
+ui_layer/tsconfig.tsbuildinfo
+
+# 因子导出快照（自动生成，单文件约 7MB）
+exports/

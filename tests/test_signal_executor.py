@@ -265,3 +265,149 @@ def test_executor_uses_pattern_suggested_sltp():
     order = executor.orders.placed[0]
     assert order.stop_price == round(1.1 * (1 - 0.02), 5)
     assert order.take_price == round(1.1 * (1 + 0.03), 5)
+
+
+def test_executor_mirror_swaps_stop_take_and_side():
+    """镜像=对手盘：方向取反，且止损价落在原止盈价、止盈价落在原止损价。"""
+    base = dict(
+        symbol="EURUSD",
+        timeframe="M15",
+        stop_method="atr",
+        take_method="atr",
+        lot_mode="fixed",
+        fixed_lots=0.01,
+        stop_atr_mult=2.0,
+        take_atr_mult=3.0,
+    )
+    executor = _executor()
+    executor.apply_runtime_config(ExecutorRuntimeConfig(**base))
+    plain = executor._position("EURUSD", 1.1, 0.002, "long")
+
+    mirrored = _executor()
+    mirrored.apply_runtime_config(ExecutorRuntimeConfig(**base, mirror=True))
+    flip = mirrored._position("EURUSD", 1.1, 0.002, "long", mirror=True)
+
+    assert plain["stop_price"] == round(1.1 - 0.002 * 2.0, 5)
+    assert plain["take_price"] == round(1.1 + 0.002 * 3.0, 5)
+    # 镜像单：止损跑到原止盈价、止盈跑到原止损价，构成严格对手盘
+    assert flip["stop_price"] == plain["take_price"]
+    assert flip["take_price"] == plain["stop_price"]
+    # 空头结构：止损在上方、止盈在下方
+    assert flip["stop_price"] > 1.1 > flip["take_price"]
+
+
+def test_executor_mirror_flips_execution_side_and_reason():
+    executor = _executor()
+    executor.apply_runtime_config(ExecutorRuntimeConfig(
+        symbol="EURUSD",
+        timeframe="M15",
+        stop_method="atr",
+        take_method="atr",
+        lot_mode="fixed",
+        fixed_lots=0.01,
+        stop_atr_mult=2.0,
+        take_atr_mult=3.0,
+        mirror=True,
+    ))
+
+    async def run():
+        return await executor.execute_scan(_scan_result(signal="long"))
+
+    executed = asyncio.run(run())
+    assert len(executed) == 1
+    assert executed[0]["side"] == "sell"
+    assert executed[0]["mirror"] is True
+    assert executed[0]["raw_signal"] == "long"
+    assert executor.orders.placed[0].reason == "AI 自动执行[镜像]"
+
+
+def test_executor_mirror_scope_filters_direction():
+    """scope=long 只镜像多单信号，scope=short 只镜像空单信号。"""
+    base = dict(
+        symbol="EURUSD",
+        timeframe="M15",
+        stop_method="atr",
+        take_method="atr",
+        lot_mode="fixed",
+        fixed_lots=0.01,
+        stop_atr_mult=2.0,
+        take_atr_mult=3.0,
+    )
+
+    def _run(scope, signal):
+        ex = _executor()
+        ex.apply_runtime_config(ExecutorRuntimeConfig(**base, mirror=True, mirror_scope=scope))
+        return asyncio.run(ex.execute_scan(_scan_result(signal=signal)))[0]
+
+    # 只镜像多单：long 信号翻成 sell，short 信号保持 sell（不翻）
+    assert _run("long", "long")["side"] == "sell"
+    assert _run("long", "long")["mirror"] is True
+    short_untouched = _run("long", "short")
+    assert short_untouched["side"] == "sell"
+    assert short_untouched["mirror"] is False
+
+    # 只镜像空单：short 信号翻成 buy，long 信号保持 buy（不翻）
+    assert _run("short", "short")["side"] == "buy"
+    assert _run("short", "short")["mirror"] is True
+    long_untouched = _run("short", "long")
+    assert long_untouched["side"] == "buy"
+    assert long_untouched["mirror"] is False
+
+
+def test_executor_direction_filters_blocked_side():
+    """direction=short 屏蔽多单、direction=long 屏蔽空单：被屏蔽的信号完全不执行。"""
+    base = dict(
+        symbol="EURUSD",
+        timeframe="M15",
+        stop_method="atr",
+        take_method="atr",
+        lot_mode="fixed",
+        fixed_lots=0.01,
+        stop_atr_mult=2.0,
+        take_atr_mult=3.0,
+    )
+
+    def _run(direction, signal):
+        ex = _executor()
+        ex.apply_runtime_config(ExecutorRuntimeConfig(**base, direction=direction))
+        return asyncio.run(ex.execute_scan(_scan_result(signal=signal)))
+
+    # 只做空：多单信号被过滤（0 笔），空单信号照常执行
+    assert _run("short", "long") == []
+    short_ok = _run("short", "short")
+    assert len(short_ok) == 1
+    assert short_ok[0]["side"] == "sell"
+
+    # 只做多：空单信号被过滤（0 笔）
+    assert _run("long", "short") == []
+    long_ok = _run("long", "long")
+    assert len(long_ok) == 1
+    assert long_ok[0]["side"] == "buy"
+
+    # 双向：两个方向都放行
+    assert len(_run("both", "long")) == 1
+    assert len(_run("both", "short")) == 1
+
+
+def test_executor_mirror_off_keeps_original_direction():
+    executor = _executor()
+    executor.apply_runtime_config(ExecutorRuntimeConfig(
+        symbol="EURUSD",
+        timeframe="M15",
+        stop_method="atr",
+        take_method="atr",
+        lot_mode="fixed",
+        fixed_lots=0.01,
+        stop_atr_mult=2.0,
+        take_atr_mult=3.0,
+        mirror=False,
+    ))
+
+    async def run():
+        return await executor.execute_scan(_scan_result(signal="long"))
+
+    executed = asyncio.run(run())
+    assert len(executed) == 1
+    assert executed[0]["side"] == "buy"
+    assert executed[0]["mirror"] is False
+    assert executor.orders.placed[0].reason == "AI 自动执行"

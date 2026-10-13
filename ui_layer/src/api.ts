@@ -346,6 +346,44 @@ export interface AiStatus {
   roles: Record<string, { label: string; configs: string[] }>;
 }
 
+/** 行情过滤配置（executor_config.market_filter 的展开结构） */
+export interface MatcherMarketFilter {
+  enabled?: boolean;
+  trends?: string[];
+  volatilities?: string[];
+  volume_states?: string[];
+  macro_directions?: string[];
+  mtf_directions?: Record<string, string>;
+  min_environment_score?: number;
+}
+
+/** 最近一次匹配扫描摘要（systemState.last_scan） */
+export interface MatcherScanSummary {
+  symbol?: string;
+  timeframe?: string;
+  regime?: string;
+  regime_detail?: string;
+  macro_trend?: string;
+  scanned?: number;
+  candidates?: MatcherCandidate[];
+  pattern_matches?: PatternMatch[];
+  errors?: string[];
+  market_analysis?: Record<string, unknown> | null;
+}
+
+/** 最近一次因行情不达标被跳过的记录（systemState.last_market_skip） */
+export interface MatcherMarketSkip {
+  time?: string;
+  symbol?: string;
+  timeframe?: string;
+  label?: string;
+  trend_direction?: string;
+  volatility?: string;
+  volume_state?: string;
+  environment_score?: number | null;
+  reason?: string;
+}
+
 export interface SystemState {
   market_live: boolean;
   matcher_running: boolean;
@@ -359,7 +397,7 @@ export interface SystemState {
   account_currency: string;
   account_login: number | null;
   max_positions: number;
-    last_scan: { regime: string; candidates: MatcherCandidate[]; pattern_matches?: PatternMatch[] } | null;
+  last_scan: MatcherScanSummary | null;
   mt5_connected: boolean;
   executor_enabled: boolean;
   executor_config?: Record<string, unknown>;
@@ -374,6 +412,8 @@ export interface SystemState {
     take: number;
     confidence: number;
     order_id: string;
+    mirror?: boolean;
+    raw_signal?: string;
   }>;
   executor_failures: Array<{
     time: string;
@@ -382,10 +422,11 @@ export interface SystemState {
     side: string;
     error: string;
     }>;
-    last_spread: number;
-    risk_tripped?: boolean;
-    risk_reasons?: string[];
-  }
+  last_spread: number;
+  risk_tripped?: boolean;
+  risk_reasons?: string[];
+  last_market_skip?: MatcherMarketSkip | null;
+}
 
 export interface Mt5Account {
   balance: number;
@@ -492,6 +533,124 @@ export interface IndicatorData {
   latest: Record<string, number | null>;
   series: Record<string, IndicatorPoint[]>;
   registry: string[];
+}
+
+export interface BrokerVenue {
+  venue: string;
+  label: string;
+  configured: boolean;
+  connected: boolean;
+}
+
+export interface BrokerSymbol {
+  symbol: string;
+  name: string;
+  venue: string;
+  inst_type?: string;
+}
+
+export interface BrokerInstrument {
+  symbol: string;
+  venue: string;
+  inst_type?: string;
+  ct_val?: number;
+  ct_type?: string;
+  tick_sz?: number;
+  lot_step?: number;
+  min_lot?: number;
+  max_lot?: number;
+  max_leverage?: number;
+  digits?: number;
+  bid?: number;
+  ask?: number;
+}
+
+export interface FundingRate {
+  symbol: string;
+  funding_rate: number;
+  next_funding_time: number;
+  settle: string;
+}
+
+export interface BrokerPosition {
+  ticket: string;
+  symbol: string;
+  type: string;
+  pos_side: string;
+  volume: number;
+  price_open: number;
+  price_current: number;
+  sl: number | null;
+  tp: number | null;
+  profit: number;
+  margin?: number;
+  leverage?: number;
+  margin_mode?: string;
+  liquidation_px?: number | null;
+}
+
+export interface CalcSizeResult {
+  size: number;
+  notional_usdt: number;
+  ct_val: number;
+  lot_sz: number;
+  min_sz: number;
+  max_sz: number;
+  risk_usd: number;
+  message: string;
+  venue: string;
+  symbol: string;
+}
+
+export interface OkxConfig {
+  enable: boolean;
+  api_key: string;          // 掩码，明文不下发
+  has_secret: boolean;
+  has_passphrase: boolean;
+  flag: string;             // "1" 模拟盘 / "0" 实盘
+  td_mode: string;          // cross / isolated / cash
+  pos_side_mode: string;    // both 双向 / net 单向
+  proxy_url: string;
+  inst_types: string;
+  venue_mode: string;       // route / mt5 / okx
+}
+
+export interface OkxRuntime {
+  configured: boolean;
+  connected: boolean;
+  server: string;
+  last_error: string;
+  proxy: string;
+}
+
+export interface OkxConfigResponse {
+  success: boolean;
+  env_path: string;
+  config: OkxConfig;
+  runtime: OkxRuntime;
+}
+
+export interface OkxSavePayload {
+  enable?: boolean;
+  api_key?: string;
+  secret_key?: string;
+  passphrase?: string;
+  flag?: string;
+  td_mode?: string;
+  pos_side_mode?: string;
+  proxy_url?: string;
+  inst_types?: string;
+  venue_mode?: string;
+  clear_secrets?: boolean;
+}
+
+export interface OkxTestResult {
+  success: boolean;
+  stage?: string;
+  message: string;
+  equity?: number | null;
+  available?: number | null;
+  proxy?: string;
 }
 
 const JSON_HEADERS = { "Content-Type": "application/json" };
@@ -1022,11 +1181,78 @@ export const api = {
   mt5CalcLot(symbol: string, riskPercent: number, slPips: number): Promise<{ success: boolean; calculated_lot: number; risk_amount: number; pip_value_used: number }> {
     return request(`/api/mt5/risk/calc_lot?symbol=${symbol}&risk_percent=${riskPercent}&sl_pips=${slPips}`);
   },
+  mt5SuggestSltp(
+    symbol: string,
+    side: string,
+    entryPrice?: number,
+  ): Promise<{
+    success: boolean;
+    data: {
+      symbol: string;
+      side: string;
+      reference_price: number;
+      atr: number;
+      r_unit: number;
+      sl: number;
+      tp: number;
+      sl_distance: number;
+      tp_distance: number;
+      sl_points: number;
+      tp_points: number;
+      reward_risk_ratio: number | null;
+      policy: Record<string, unknown>;
+    };
+  }> {
+    const q = new URLSearchParams({ symbol, side });
+    if (entryPrice && entryPrice > 0) q.set("entry_price", String(entryPrice));
+    return request(`/api/mt5/risk/suggest_sltp?${q.toString()}`);
+  },
+  mt5ApplySuggestedSltp(ticket: number): Promise<{ success: boolean; data: { ticket: number; suggestion: Record<string, unknown>; applied: Record<string, unknown> } }> {
+    return request("/api/mt5/position/apply_suggested_sltp", {
+      method: "POST",
+      headers: JSON_HEADERS,
+      body: JSON.stringify({ ticket }),
+    });
+  },
   orderLog(): Promise<{ logs: OrderLog[] }> {
     return request("/api/orders/log");
   },
-  executorState(): Promise<{ enabled: boolean; min_confidence: number; max_positions: number; symbol: string; timeframe: string; last_executions: SystemState["last_executions"] }> {
+  vpatternState(): Promise<Record<string, unknown>> {
+    return request("/api/vpattern/state");
+  },
+  vpatternToggle(enabled: boolean): Promise<{ success: boolean; enabled: boolean; message: string }> {
+    return request("/api/vpattern/toggle", {
+      method: "POST",
+      headers: JSON_HEADERS,
+      body: JSON.stringify({ enabled }),
+    });
+  },
+  vpatternConfig(config: Record<string, unknown>): Promise<{ success: boolean; config: Record<string, unknown>; message: string }> {
+    return request("/api/vpattern/config", {
+      method: "POST",
+      headers: JSON_HEADERS,
+      body: JSON.stringify({ config }),
+    });
+  },
+  vpatternTrades(): Promise<{ trades: Array<Record<string, unknown>>; stats: Record<string, unknown>; daily: Array<Record<string, unknown>> }> {
+    return request("/api/vpattern/trades");
+  },
+  executorState(): Promise<{ enabled: boolean; config: Record<string, unknown>; last_executions: SystemState["last_executions"] }> {
     return request("/api/executor/state");
+  },
+  setMirror(enabled: boolean, scope: "all" | "long" | "short" = "all"): Promise<{ message: string; mirror: boolean; scope: string }> {
+    return request("/api/executor/mirror", {
+      method: "POST",
+      headers: JSON_HEADERS,
+      body: JSON.stringify({ enabled, scope }),
+    });
+  },
+  setDirection(direction: "both" | "long" | "short"): Promise<{ message: string; direction: string }> {
+    return request("/api/executor/direction", {
+      method: "POST",
+      headers: JSON_HEADERS,
+      body: JSON.stringify({ direction }),
+    });
   },
   executorToggle(enabled: boolean): Promise<{ message: string; enabled: boolean }> {
     return request("/api/executor/toggle", {
@@ -1098,7 +1324,89 @@ export const api = {
   calendar(dateFrom: string, dateTo: string): Promise<CalendarPayload> {
     return request(`/api/analytics/calendar?date_from=${encodeURIComponent(dateFrom)}&date_to=${encodeURIComponent(dateTo)}`);
   },
-  
+  // —— 统一交易所接口（MT5 / OKX 共用，新增交易所时前端无需再复制一套）——
+  brokerVenues(): Promise<{ venues: BrokerVenue[]; mode: string; okx_simulated: boolean }> {
+    return request("/api/broker/venues");
+  },
+  brokerSymbols(venue?: string): Promise<{ symbols: BrokerSymbol[]; count: number }> {
+    const qs = venue ? `?venue=${encodeURIComponent(venue)}` : "";
+    return request(`/api/broker/symbols${qs}`);
+  },
+  brokerInstrument(symbol: string): Promise<{ success: boolean; data: BrokerInstrument }> {
+    return request(`/api/broker/instrument?symbol=${encodeURIComponent(symbol)}`);
+  },
+  brokerFundingRate(symbol: string): Promise<{ success: boolean; data: FundingRate | null; message?: string }> {
+    return request(`/api/broker/funding-rate?symbol=${encodeURIComponent(symbol)}`);
+  },
+  brokerAccount(venue = "okx"): Promise<{ success: boolean; venue: string; data: Record<string, unknown> }> {
+    return request(`/api/broker/account?venue=${encodeURIComponent(venue)}`);
+  },
+  brokerPositions(venue = "okx"): Promise<{ success: boolean; venue: string; positions: BrokerPosition[] }> {
+    return request(`/api/broker/positions?venue=${encodeURIComponent(venue)}`);
+  },
+  brokerTick(symbol: string): Promise<{ success: boolean; data: Record<string, unknown> }> {
+    return request(`/api/broker/tick?symbol=${encodeURIComponent(symbol)}`);
+  },
+  brokerKlines(symbol: string, timeframe: string, limit = 500): Promise<{ success: boolean; symbol: string; timeframe: string; venue: string; bars: Bar[] }> {
+    return request(`/api/broker/klines?symbol=${encodeURIComponent(symbol)}&timeframe=${encodeURIComponent(timeframe)}&limit=${limit}`);
+  },
+  brokerCalcSize(params: { symbol: string; entry: number; stop: number; risk_pct?: number; equity?: number }): Promise<{ success: boolean; data: CalcSizeResult }> {
+    const qs = new URLSearchParams({
+      symbol: params.symbol,
+      entry: String(params.entry),
+      stop: String(params.stop),
+      risk_pct: String(params.risk_pct ?? 1.0),
+    });
+    if (params.equity) qs.set("equity", String(params.equity));
+    return request(`/api/broker/calc-size?${qs.toString()}`);
+  },
+  brokerOrder(payload: {
+    symbol: string;
+    side: "buy" | "sell";
+    size: number;
+    price?: number;
+    sl?: number;
+    tp?: number;
+    comment?: string;
+  }): Promise<{ success: boolean; message?: string; ticket?: string; venue?: string }> {
+    return request("/api/broker/order", {
+      method: "POST",
+      headers: JSON_HEADERS,
+      body: JSON.stringify(payload),
+    });
+  },
+  brokerClose(ticket: string, size?: number): Promise<{ success: boolean; message?: string; venue?: string }> {
+    return request("/api/broker/close", {
+      method: "POST",
+      headers: JSON_HEADERS,
+      body: JSON.stringify(size ? { ticket, size } : { ticket }),
+    });
+  },
+  brokerAmendSl(ticket: string, sl?: number, tp?: number): Promise<{ success: boolean; message?: string; venue?: string }> {
+    return request("/api/broker/amend-sl", {
+      method: "POST",
+      headers: JSON_HEADERS,
+      body: JSON.stringify({ ticket, sl, tp }),
+    });
+  },
+  // —— 欧易 OKX 密钥配置（前端表单 → 后端写 .env → 热重载网关）——
+  okxConfig(): Promise<OkxConfigResponse> {
+    return request("/api/okx-settings/config");
+  },
+  saveOkxConfig(payload: OkxSavePayload): Promise<{ success: boolean; message: string; config: OkxConfig; runtime: OkxRuntime }> {
+    return request("/api/okx-settings/config", {
+      method: "POST",
+      headers: JSON_HEADERS,
+      body: JSON.stringify(payload),
+    });
+  },
+  testOkxConfig(payload: OkxSavePayload): Promise<OkxTestResult> {
+    return request("/api/okx-settings/test", {
+      method: "POST",
+      headers: JSON_HEADERS,
+      body: JSON.stringify(payload),
+    });
+  },
 };
 
 

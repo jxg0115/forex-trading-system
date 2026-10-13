@@ -53,12 +53,27 @@ class Settings:
     smtp_password: str = _env("SMTP_PASSWORD")
     alert_email_to: str = _env("ALERT_EMAIL_TO")
 
-    broker: str = _env("BROKER", "paper")  # paper | mt5
+    broker: str = _env("BROKER", "paper")  # paper | mt5 | okx
     mt5_login: int = int(_env("MT5_LOGIN", "0") or 0)
     mt5_password: str = _env("MT5_PASSWORD")
     mt5_server: str = _env("MT5_SERVER")
     mt5_path: str = _env("MT5_PATH")
     mt5_magic: int = int(_env("MT5_MAGIC", "202608"))
+
+    # —— OKX（欧易）配置 ——
+    okx_enable: bool = _env("OKX_ENABLE", "0") == "1"
+    okx_api_key: str = _env("OKX_API_KEY")
+    okx_secret_key: str = _env("OKX_SECRET_KEY")
+    okx_passphrase: str = _env("OKX_PASSPHRASE")
+    okx_flag: str = _env("OKX_FLAG", "1")            # "1"=模拟盘（沙盒），"0"=实盘
+    okx_td_mode: str = _env("OKX_TD_MODE", "cross")  # cross 全仓 / isolated 逐仓 / cash 现货
+    okx_pos_side_mode: str = _env("OKX_POS_SIDE_MODE", "both")  # both 双向 / net 单向
+    # 留空=自动探测 Windows 系统代理（实测本机能访问 okx 的是系统代理，非环境变量那个）；
+    # 填 "direct" 表示强制直连；否则填具体代理，如 http://127.0.0.1:3067
+    okx_proxy_url: str = _env("OKX_PROXY_URL")
+    okx_inst_types: str = _env("OKX_INST_TYPES", "SWAP,SPOT,FUTURES")  # 可选合约类型
+    # 品种归属模式：route=按 symbol 自动路由；mt5/okx=全局强制切换
+    venue_mode: str = _env("VENUE_MODE", "route")
 
     auto_trade_enabled: bool = _env("AUTO_TRADE_ENABLED", "1") == "1"
     auto_trade_min_confidence: float = float(_env("AUTO_TRADE_MIN_CONFIDENCE", "0.55"))

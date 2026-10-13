@@ -427,6 +427,72 @@ async def executor_toggle(req: dict, state=Depends(get_app_state)):
     return {"message": "AI 自动执行已开启" if enabled else "AI 自动执行已关闭", "enabled": enabled}
 
 
+@router.post("/executor/mirror")
+async def executor_mirror(req: dict, state=Depends(get_app_state)):
+    """镜像交易开关：翻方向 + 互换止损/止盈距离（对手盘）。
+
+    body: {"enabled": true/false, "scope": "all"|"long"|"short"}
+      all   = 所有信号都镜像
+      long  = 只镜像"多单"信号（等价于把多单腿整体反过来做）
+      short = 只镜像"空单"信号
+    """
+    enabled = bool(req.get("enabled", False))
+    scope = str(req.get("scope") or "all").lower()
+    if scope not in ("all", "long", "short"):
+        raise HTTPException(status_code=400, detail="scope 只能是 all / long / short")
+    current = state.signal_executor.config
+    updated = replace(current, mirror=enabled, mirror_scope=scope)
+    state.signal_executor.apply_runtime_config(updated)
+    state.repository.save_system_state(
+        state.matcher_running,
+        state.matcher_symbol,
+        state.matcher_timeframe,
+        {
+            **updated.to_dict(),
+            "pattern_min_similarity": state.matcher_pattern_min_similarity,
+            "pattern_min_samples": state.matcher_pattern_min_samples,
+            "pattern_time_decay_days": state.matcher_pattern_time_decay_days,
+        },
+    )
+    tip = {"all": "全部信号", "long": "仅多单信号", "short": "仅空单信号"}[scope]
+    return {
+        "message": f"镜像交易已{'开启' if enabled else '关闭'}（{tip}）",
+        "mirror": enabled,
+        "scope": scope,
+    }
+
+
+@router.post("/executor/direction")
+async def executor_direction(req: dict, state=Depends(get_app_state)):
+    """允许的交易方向：both=双向 / long=只做多 / short=只做空（屏蔽多单即选 short）。
+
+    body: {"direction": "both"|"long"|"short"}
+    被屏蔽方向的信号会在执行前直接过滤掉，不发单、不占用仓位。
+    """
+    direction = str(req.get("direction") or "both").lower()
+    if direction not in ("both", "long", "short"):
+        raise HTTPException(status_code=400, detail="direction 只能是 both / long / short")
+    current = state.signal_executor.config
+    updated = replace(current, direction=direction)
+    state.signal_executor.apply_runtime_config(updated)
+    state.repository.save_system_state(
+        state.matcher_running,
+        state.matcher_symbol,
+        state.matcher_timeframe,
+        {
+            **updated.to_dict(),
+            "pattern_min_similarity": state.matcher_pattern_min_similarity,
+            "pattern_min_samples": state.matcher_pattern_min_samples,
+            "pattern_time_decay_days": state.matcher_pattern_time_decay_days,
+        },
+    )
+    tip = {"both": "双向都做", "long": "只做多（已屏蔽空单）", "short": "只做空（已屏蔽多单）"}[direction]
+    return {
+        "message": f"交易方向已切换为：{tip}",
+        "direction": direction,
+    }
+
+
 @router.post("/executor/scan-run")
 async def executor_scan_run(state=Depends(get_app_state)):
     scan = state.matcher.scan(state.signal_executor.config.symbol, state.signal_executor.config.timeframe)

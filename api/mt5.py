@@ -17,7 +17,7 @@ from oems.mt5_gateway import MT5Gateway
 from oems.order_manager import OrderManager
 from oems.pending_manager import PendingExpirationManager
 from oems.position_monitor import MT5PositionMonitor
-from oems.smart_stop import SmartStopEngine
+from oems.smart_stop import SmartStopEngine, _atr_of
 from oems.trailing_stop import TrailingStopService
 from paper_trading.service import PaperTradingService
 from signal_matcher.executor import SignalExecutor
@@ -42,6 +42,10 @@ class MT5OrderRequest(BaseModel):
 
 class MT5TicketRequest(BaseModel):
     ticket: int = Field(..., description="MT5 订单/持仓编号")
+
+
+class MT5ApplySltpRequest(BaseModel):
+    ticket: int = Field(..., description="MT5 持仓编号")
 
 
 class MT5SetupRequest(BaseModel):
@@ -341,3 +345,98 @@ async def calc_lot(symbol: str = Query("EURUSD"), risk_percent: float = Query(1.
         "risk_amount": round(float(acc["equity"]) * (risk_percent / 100.0), 2),
         "pip_value_used": info["pip_value"],
     }
+
+
+def _suggest_sltp_prices(gw, state, symbol: str, side: str, entry_price: float) -> dict:
+    """按系统兜底口径（SltpPolicyConfig）计算 SL/TP，返回各档位距离。
+
+    - R = risk_mult × ATR(14, M15)；SL = entry ∓ hard_stop_atr × ATR
+    - TP = entry ± take_r_mult × R（盈亏比 ≈ 1:2，与系统初始硬止损兜底同口径）
+    """
+    policy = getattr(state, "sltp_policy", None)
+    risk_mult = float(getattr(policy, "risk_mult", 1.5) or 1.5)
+    take_r_mult = float(getattr(policy, "take_r_mult", 2.0) or 2.0)
+    hard_stop_atr = float(getattr(policy, "hard_stop_atr", 1.5) or 1.5)
+    timeframe = str(getattr(policy, "timeframe", "M15") or "M15")
+
+    side_norm = "buy" if str(side).upper().startswith("BUY") else "sell"
+    direction = 1.0 if side_norm == "buy" else -1.0
+
+    info = gw.get_symbol_info(symbol) or {}
+    digits = int(info.get("digits", 5) or 5)
+    point = float(info.get("point", 0.00001) or 0.00001)
+
+    atr = _atr_of(gw, symbol, timeframe, entry_price * 0.005)
+    if atr <= 0:
+        raise HTTPException(status_code=500, detail=f"无法计算 {symbol} {timeframe} ATR，请手动填写止损止盈")
+
+    r_unit = max(risk_mult * atr, atr * 0.1)
+    sl_dist = max(hard_stop_atr, 0.5) * atr
+    tp_dist = take_r_mult * r_unit
+    sl = entry_price - direction * sl_dist
+    tp = entry_price + direction * tp_dist
+    return {
+        "symbol": symbol,
+        "side": side_norm,
+        "reference_price": round(entry_price, digits),
+        "atr": round(atr, digits),
+        "r_unit": round(r_unit, digits),
+        "sl": round(sl, digits),
+        "tp": round(tp, digits),
+        "sl_distance": round(sl_dist, digits),
+        "tp_distance": round(tp_dist, digits),
+        "sl_points": round(sl_dist / point, 1),
+        "tp_points": round(tp_dist / point, 1),
+        "reward_risk_ratio": round(tp_dist / sl_dist, 2) if sl_dist else None,
+        "policy": {
+            "risk_mult": risk_mult,
+            "take_r_mult": take_r_mult,
+            "hard_stop_atr": hard_stop_atr,
+            "timeframe": timeframe,
+        },
+    }
+
+
+@router.get("/risk/suggest_sltp")
+async def suggest_sltp(
+    symbol: str = Query("EURUSD"),
+    side: str = Query("buy"),
+    entry_price: Optional[float] = Query(None),
+    state=Depends(get_app_state),
+):
+    """为手动下单建议 SL/TP（系统兜底口径）；entry_price 缺省按实时盘口价。"""
+
+    gw = _gateway(state)
+    if entry_price is None or entry_price <= 0:
+        tick = gw.get_tick(symbol)
+        if not tick:
+            raise HTTPException(status_code=500, detail=f"无法获取 {symbol} 实时行情，请手动填写止损止盈")
+        side_norm = "buy" if str(side).upper().startswith("BUY") else "sell"
+        entry_price = float(tick["ask"] if side_norm == "buy" else tick["bid"])
+    return {"success": True, "data": _suggest_sltp_prices(gw, state, symbol, side, entry_price)}
+
+
+@router.post("/position/apply_suggested_sltp")
+async def apply_suggested_sltp(req: MT5ApplySltpRequest, state=Depends(get_app_state)):
+    """为已有持仓一键补挂/重算 SL/TP（按持仓自身开仓价、系统兜底口径计算并直接修改）。"""
+
+    gw = _gateway(state)
+    positions = gw.get_positions() or []
+    pos = next((p for p in positions if int(p.get("ticket", 0) or 0) == req.ticket), None)
+    if not pos:
+        raise HTTPException(status_code=404, detail=f"未找到持仓单 #{req.ticket}")
+
+    entry = float(pos.get("price_open") or 0)
+    if entry <= 0:
+        raise HTTPException(status_code=500, detail=f"持仓 #{req.ticket} 开仓价异常，无法计算")
+    suggestion = _suggest_sltp_prices(gw, state, str(pos.get("symbol")), str(pos.get("type")), entry)
+
+    res = gw.modify_position(req.ticket, sl=suggestion["sl"], tp=suggestion["tp"])
+    if not res.get("success"):
+        raise HTTPException(status_code=400, detail=res.get("message", "修改止损失败"))
+    await state.notifier.send_alert(
+        "info",
+        "手动持仓已补挂止损止盈",
+        f"持仓 #{req.ticket} {suggestion['symbol']} 已按系统口径设置 SL={suggestion['sl']} / TP={suggestion['tp']}",
+    )
+    return {"success": True, "data": {"ticket": req.ticket, "suggestion": suggestion, "applied": res}}

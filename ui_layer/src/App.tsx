@@ -1,6 +1,7 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import {
   Activity,
+  AlertTriangle,
   Ban,
   BarChart3,
   Bell,
@@ -19,6 +20,7 @@ import {
   Pencil,
   Power,
   Radar,
+  Repeat,
   RefreshCw,
   Save,
   Shield,
@@ -29,6 +31,7 @@ import {
   TestTube2,
   FlaskConical,
   Trash2,
+  TrendingUp,
   Undo2,
   Wallet,
   Wand2,
@@ -37,6 +40,9 @@ import {
 import { KLineChart, type ChartMode, type ModelSignal } from "./components/KLineChart";
 import { FactorEditModal } from "./components/FactorEditModal";
 import { Mt5Panel } from "./components/Mt5Panel";
+import { OkxPanel } from "./components/OkxPanel";
+import { OkxSettings } from "./components/OkxSettings";
+import { VPatternPage } from "./components/VPatternPage";
 import { OrderLogPanel } from "./components/OrderLogPanel";
 import { FactorMiningPanel } from "./components/FactorMiningPanel";
 
@@ -44,7 +50,7 @@ import { MarketStatusPanel } from "./components/MarketStatusPanel";
 import { CalendarPanel } from "./components/CalendarPanel";
 import { SltpPolicyPanel } from "./components/SltpPolicyPanel";
 import { SymbolSearchSelect } from "./components/SymbolSearchSelect";
-import { api, type AiConfig, type AiStatus, type Alert, type BacktestResult, type Bar, type Factor, type FactorDraft, type FactorPayload, type IndicatorData, type LearnTradeResult, type MarkerPoint, type MatcherCandidate, type Mt5Tick, type OptimizeResult, type Selection, type SystemState, type TradeStatsResult } from "./api";
+import { api, type AiConfig, type AiStatus, type Alert, type BacktestResult, type Bar, type Factor, type FactorDraft, type FactorPayload, type IndicatorData, type LearnTradeResult, type MarkerPoint, type MatcherCandidate, type MatcherMarketFilter, type Mt5Tick, type OptimizeResult, type Selection, type SystemState, type TradeStatsResult } from "./api";
 
 interface RegionStats {
   bar_count: number;
@@ -62,80 +68,350 @@ interface ScanResult {
 }
 
 type MainTab = "factors" | "market" | "trading" | "replay" | "ai" | "sltp" | "mining" | "calendar";
-type SubTab = "mark" | "backtest" | "manage" | "signals" | "mt5" | "replay" | "orders" | "stats" | "optimize" | "sltp";
+type SubTab = "mark" | "backtest" | "manage" | "signals" | "mt5" | "okx-setup" | "replay" | "orders" | "stats" | "optimize" | "sltp";
 
 const TIMEFRAMES = ["M1", "M5", "M15", "M30", "H1", "H4", "D1"];
-const MATCHER_LABELS: Record<string, string> = {
-  symbol: "交易品种",
-  timeframe: "K线周期",
-  min_confidence: "最小置信度",
-  direction: "交易方向",
-  lot_mode: "仓位模式",
-  fixed_lots: "固定手数",
-  risk_percent: "单笔风险 %",
-  max_positions: "最大持仓",
-  initial_sltp_source: "止损止盈来源",
-  stop_method: "止损方式",
-  take_method: "止盈方式",
-  stop_atr_mult: "ATR 止损倍数",
-  take_atr_mult: "ATR 止盈倍数",
-  stop_points: "止损点数",
-  take_points: "止盈点数",
-  level_buffer_pct: "关键位缓冲 %",
-  take_level_buffer_pct: "止盈关键位缓冲 %",
-  trailing_unit: "移动单位",
-  trailing_activation_pct: "移动激活 %",
-  trailing_retrace_pct: "移动回撤 %",
-  trailing_take_retrace_pct: "移动止盈回撤 %",
-  trailing_take_buffer_pct: "止盈锁仓缓冲 %",
-  trailing_activation_atr: "移动激活 ATR",
-  trailing_stop_atr: "移动止损 ATR",
-  trailing_take_atr: "移动止盈 ATR",
-  trailing_take_buffer_atr: "止盈锁仓 ATR",
-  sl_tp_strategies: "止损止盈策略",
-  hw_activation_profit: "高水位激活盈利",
-  hw_max_retrace_pct: "高水位最大回撤 %",
-  pc_tier1_profit: "第一档落袋盈利",
-  pc_tier1_close_pct: "第一档平仓比例 %",
-  pc_tier2_profit: "第二档落袋盈利",
-  pc_tier2_close_pct: "第二档平仓比例 %",
-  pc_breakeven_buffer: "保本缓冲",
-  delay_ms: "下单延迟(毫秒)",
-  auto_close_enabled: "自动平仓",
-  alert_enabled: "推送告警",
-  max_daily_loss_pct: "最大日亏损 %",
-  max_drawdown_pct: "最大回撤 %",
+
+// ---------------------------------------------------------------------------
+// 「当前实盘匹配参数」面板：字段中文化与语义化映射
+// ---------------------------------------------------------------------------
+
+const ENUM_LABELS: Record<string, string> = {
+  both: "双向",
+  long: "只做多",
+  short: "只做空",
+  all: "全部信号",
+  risk: "按风险比例反算",
+  fixed: "固定手数",
+  atr: "ATR 自适应",
+  pattern: "形态结构（关键位）",
+  points: "固定点数",
+  high_watermark: "高水位保护",
+  percent: "百分比",
 };
 
-const MATCHER_HIDDEN_KEYS = new Set([
-  "initial_sltp_source",
-  "stop_method",
-  "take_method",
-  "stop_atr_mult",
-  "take_atr_mult",
-  "stop_points",
-  "take_points",
-  "level_buffer_pct",
-  "take_level_buffer_pct",
-  "trailing_enabled",
-  "trailing_unit",
-  "trailing_activation_pct",
-  "trailing_retrace_pct",
-  "trailing_take_retrace_pct",
-  "trailing_take_buffer_pct",
-  "trailing_activation_atr",
-  "trailing_stop_atr",
-  "trailing_take_atr",
-  "trailing_take_buffer_atr",
-  "sl_tp_strategies",
-  "hw_activation_profit",
-  "hw_max_retrace_pct",
-  "pc_tier1_profit",
-  "pc_tier1_close_pct",
-  "pc_tier2_profit",
-  "pc_tier2_close_pct",
-  "pc_breakeven_buffer",
-]);
+const MIRROR_SCOPE_LABELS: Record<string, string> = {
+  all: "全部信号都反转",
+  long: "仅做多信号反转",
+  short: "仅做空信号反转",
+};
+
+const SIDE_LABELS: Record<string, string> = {
+  buy: "买入",
+  sell: "卖出",
+  long: "做多",
+  short: "做空",
+};
+
+/** 布尔/开关值语义化 */
+function fmtSwitch(v: unknown): string {
+  if (v === true || v === "true") return "开启";
+  if (v === false || v === "false") return "关闭";
+  return "--";
+}
+
+/** 枚举值语义化（无映射则原样返回） */
+function fmtEnum(v: unknown, map?: Record<string, string>): string {
+  const s = String(v ?? "");
+  if (map && map[s]) return map[s];
+  return s || "--";
+}
+
+/** 数字千分位格式化 */
+function fmtNum(v: unknown, digits = 2): string {
+  if (typeof v !== "number" || !Number.isFinite(v)) return "--";
+  return v.toLocaleString("en-US", { minimumFractionDigits: digits, maximumFractionDigits: digits });
+}
+
+/** 时间戳 -> HH:MM:SS */
+function fmtClock(iso: unknown): string {
+  if (typeof iso !== "string" || !iso) return "--";
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return "--";
+  return d.toLocaleTimeString("zh-CN", { hour12: false });
+}
+
+/** 参数面板的指标格 */
+function ViewMetric({ label, value, tone }: { label: string; value: ReactNode; tone?: "good" | "bad" }) {
+  return (
+    <div className="metric">
+      <div className="label">{label}</div>
+      <div className={`value${tone ? ` ${tone}` : ""}`}>{value}</div>
+    </div>
+  );
+}
+
+/** 参数面板的分组标题 */
+function ViewSection({ title, children }: { title: string; children: ReactNode }) {
+  return (
+    <div className="tool-block" style={{ marginTop: 10 }}>
+      <h4 style={{ margin: "0 0 8px", fontSize: 12, color: "var(--muted)", letterSpacing: 0.5 }}>{title}</h4>
+      {children}
+    </div>
+  );
+}
+
+/** 参数面板的行式键值（label 固定宽度，值右侧） */
+function ViewRow({ label, value, warn }: { label: string; value: ReactNode; warn?: boolean }) {
+  return (
+    <div className="trade-row" style={{ gridTemplateColumns: "160px 1fr" }}>
+      <div className="t-label">{label}</div>
+      <div className="t-value" style={warn ? { color: "var(--amber)" } : undefined}>{value}</div>
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// 「当前实盘匹配参数」面板：重排版 —— 顶部状态条 + 六大分组 + 运行实况
+// ---------------------------------------------------------------------------
+
+const TREND_LABELS: Record<string, string> = { up: "上涨", down: "下跌", flat: "震荡", range: "震荡" };
+const SIGNAL_LABELS: Record<string, string> = { long: "做多", short: "做空", none: "无信号" };
+const SLTP_STRATEGY_LABELS: Record<string, string> = {
+  high_watermark: "高水位保护",
+  profit_close: "分段落袋",
+  breakeven: "保本移动",
+  trailing: "移动止损",
+};
+
+/** 标签组（行情过滤等多选值展开为 chips，避免 [object Object]） */
+function ViewChips({ items, empty = "无限制" }: { items: string[]; empty?: string }) {
+  if (!items.length) return <span style={{ color: "var(--muted)" }}>{empty}</span>;
+  return (
+    <span style={{ display: "inline-flex", flexWrap: "wrap", gap: 4 }}>
+      {items.map((it) => (
+        <span className="badge" key={it}>{it}</span>
+      ))}
+    </span>
+  );
+}
+
+function MatcherViewPanel({ state, onClose }: { state: SystemState | null; onClose: () => void }) {
+  const cfg = state?.executor_config ?? {};
+  const num = (k: string, d = 0): number => {
+    const v = cfg[k];
+    return typeof v === "number" && Number.isFinite(v) ? v : d;
+  };
+  const str = (k: string): string => {
+    const v = cfg[k];
+    return typeof v === "string" ? v : "";
+  };
+  const bool = (k: string): boolean => cfg[k] === true || cfg[k] === "true";
+  const arr = (k: string): string[] =>
+    Array.isArray(cfg[k]) ? (cfg[k] as unknown[]).map((x) => String(x)) : [];
+  const mf: MatcherMarketFilter =
+    typeof cfg.market_filter === "object" && cfg.market_filter !== null
+      ? (cfg.market_filter as MatcherMarketFilter)
+      : {};
+  const equity = state?.account_equity ?? 0;
+  const balance = state?.account_balance ?? null;
+  const profit = state?.account_profit ?? null;
+  const riskUsd = (equity * num("risk_percent")) / 100;
+  const dailyLossLoose = num("max_daily_loss_pct") >= 100;
+  const drawdownLoose = num("max_drawdown_pct") >= 99;
+  const tripped = state?.risk_tripped === true;
+  const strategies = arr("sl_tp_strategies");
+  const scan = state?.last_scan ?? null;
+
+  return (
+    <div className="modal-overlay">
+      <div className="modal" style={{ width: 860, maxHeight: "88vh", overflow: "auto" }}>
+        <h3><Eye size={14} /> 当前实盘匹配参数</h3>
+
+        {/* 顶部状态条 */}
+        <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
+          <span className="status-pill"><span className={`dot ${state?.matcher_running ? "on" : ""}`} /> 实盘匹配 {state?.matcher_running ? "运行中" : "已暂停"}</span>
+          <span className="status-pill"><span className={`dot ${state?.executor_enabled ? "on" : ""}`} /> 执行器 {state?.executor_enabled ? "开启" : "关闭"}</span>
+          <span className="status-pill"><span className={`dot ${state?.mt5_connected ? "on" : ""}`} /> MT5 {state?.mt5_connected ? "已连接" : "未连接"}</span>
+          <span className="status-pill"><Wallet size={13} /> 账户 {state?.account_login ?? "--"} · 权益 {fmtNum(equity)} USD</span>
+          <span className="status-pill"><Activity size={13} /> 点差 {state?.last_spread ?? 0} 点</span>
+        </div>
+
+        {/* 风控警告：日亏损/回撤上限形同虚设时醒目提示 */}
+        {(dailyLossLoose || drawdownLoose || tripped) && (
+          <div className={`alert-item ${tripped ? "error" : "warning"}`} style={{ marginTop: 10 }}>
+            <AlertTriangle size={14} color={tripped ? "var(--red)" : "var(--amber)"} />
+            <div>
+              <div className="a-title" style={{ color: tripped ? "var(--red)" : "var(--amber)" }}>
+                {tripped ? "风控已触发，暂停开新仓" : "风控未设防"}
+              </div>
+              {tripped && <div className="a-msg">触发原因：{(state?.risk_reasons ?? []).join("；") || "未知"}</div>}
+              {dailyLossLoose && <div className="a-msg">日亏损上限 {num("max_daily_loss_pct")}% —— 几乎亏光本金才会触发，等于没有日止损</div>}
+              {drawdownLoose && <div className="a-msg">最大回撤上限 {num("max_drawdown_pct")}% —— 回撤到接近归零才停手，等于没有回撤保护</div>}
+            </div>
+          </div>
+        )}
+
+        {/* 一、账户与持仓 */}
+        <ViewSection title="一、账户与持仓">
+          <div className="metric-grid">
+            <ViewMetric label="账户权益" value={`${fmtNum(equity)} USD`} />
+            <ViewMetric label="账户余额" value={balance == null ? "--" : `${fmtNum(balance)} USD`} />
+            <ViewMetric label="浮动盈亏" value={profit == null ? "--" : `${profit >= 0 ? "+" : ""}${fmtNum(profit)}`} tone={profit == null ? undefined : profit >= 0 ? "good" : "bad"} />
+            <ViewMetric label="当前持仓" value={`${state?.active_positions ?? 0} 笔`} />
+            <ViewMetric label="执行器最大持仓" value={`${num("max_positions", 3)} 笔`} />
+            <ViewMetric label="匹配器并发上限" value={`${state?.max_positions ?? 0} 个因子`} />
+          </div>
+          <div style={{ fontSize: 11, color: "var(--muted)", marginTop: 6 }}>
+            注：「匹配器并发上限」是同时参与扫描的因子数量；「执行器最大持仓」是最多同时持有的订单笔数，两者互不影响。
+          </div>
+        </ViewSection>
+
+        {/* 二、信号与执行 */}
+        <ViewSection title="二、信号与执行">
+          <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap", marginBottom: 8 }}>
+            <span className="status-pill" style={bool("mirror") ? { borderColor: "var(--amber)", color: "var(--amber)", background: "rgba(240, 166, 58, 0.10)", fontWeight: 700 } : undefined}>
+              <Repeat size={13} /> 镜像交易 {bool("mirror") ? "开启" : "关闭"}
+            </span>
+            {bool("mirror") && (
+              <span style={{ fontSize: 11, color: "var(--muted)" }}>
+                监测到做多 → 实际做空，止损/止盈距离对调；范围：{MIRROR_SCOPE_LABELS[str("mirror_scope")] ?? "全部信号都反转"}
+              </span>
+            )}
+          </div>
+          <div className="metric-grid">
+            <ViewMetric label="交易品种" value={str("symbol") || "--"} />
+            <ViewMetric label="K 线周期" value={str("timeframe") || "--"} />
+            <ViewMetric label="最小置信度" value={`${num("min_confidence").toFixed(2)}（0~1）`} />
+            <ViewMetric label="交易方向" value={fmtEnum(str("direction"), ENUM_LABELS)} />
+            <ViewMetric label="下单延迟" value={`${num("delay_ms")} ms`} />
+            <ViewMetric label="自动平仓" value={fmtSwitch(bool("auto_close_enabled"))} tone={bool("auto_close_enabled") ? "good" : "bad"} />
+          </div>
+          <ViewRow label="推送告警" value={fmtSwitch(bool("alert_enabled"))} />
+        </ViewSection>
+
+        {/* 三、仓位与风险 */}
+        <ViewSection title="三、仓位与风险">
+          <div className="metric-grid">
+            <ViewMetric label="仓位模式" value={fmtEnum(str("lot_mode"), ENUM_LABELS)} />
+            <ViewMetric label="单笔风险" value={`${num("risk_percent")}% ≈ ${fmtNum(riskUsd)} USD`} />
+            <ViewMetric label="固定手数（备用）" value={String(num("fixed_lots", 0.01))} />
+            <ViewMetric label="日亏损上限" value={`${num("max_daily_loss_pct")}%`} tone={dailyLossLoose ? "bad" : undefined} />
+            <ViewMetric label="最大回撤上限" value={`${num("max_drawdown_pct")}%`} tone={drawdownLoose ? "bad" : undefined} />
+            <ViewMetric label="风控状态" value={tripped ? "已触发" : "正常"} tone={tripped ? "bad" : "good"} />
+          </div>
+        </ViewSection>
+
+        {/* 四、止损止盈 */}
+        <ViewSection title="四、止损止盈">
+          <div className="metric-grid">
+            <ViewMetric label="止损止盈来源" value={fmtEnum(str("initial_sltp_source"), ENUM_LABELS)} />
+            <ViewMetric label="止损方式" value={fmtEnum(str("stop_method"), ENUM_LABELS)} />
+            <ViewMetric label="止盈方式" value={fmtEnum(str("take_method"), ENUM_LABELS)} />
+          </div>
+          <ViewRow label="止损距离" value={str("stop_method") === "atr" ? `${num("stop_atr_mult")} × ATR` : `${num("stop_points")} 点`} />
+          <ViewRow label="止盈距离" value={str("take_method") === "atr" ? `${num("take_atr_mult")} × ATR` : `${num("take_points")} 点`} />
+          <ViewRow label="关键位缓冲" value={`${num("level_buffer_pct")}%`} />
+          <ViewRow label="止盈关键位缓冲" value={`${num("take_level_buffer_pct")}%`} />
+          <ViewRow label="移动止损" value={fmtSwitch(bool("trailing_enabled"))} />
+          {bool("trailing_enabled") && (
+            <ViewRow
+              label="移动止损参数"
+              value={str("trailing_unit") === "atr"
+                ? `激活 ${num("trailing_activation_atr")}×ATR · 止损 ${num("trailing_stop_atr")}×ATR · 止盈回撤 ${num("trailing_take_atr")}×ATR`
+                : `激活 ${num("trailing_activation_pct")}% · 回撤 ${num("trailing_retrace_pct")}% · 止盈回撤 ${num("trailing_take_retrace_pct")}%`}
+            />
+          )}
+          <ViewRow label="高级策略" value={<ViewChips items={strategies.map((s) => SLTP_STRATEGY_LABELS[s] ?? s)} empty="无（仅基础止损止盈）" />} />
+          {strategies.includes("high_watermark") && (
+            <ViewRow label="高水位保护" value={`浮盈 ≥ ${fmtNum(num("hw_activation_profit"), 0)} USD 启动 · 最大回撤 ${num("hw_max_retrace_pct")}%`} />
+          )}
+          {strategies.some((s) => s !== "high_watermark" && s !== "trailing") && (
+            <ViewRow label="分段落袋" value={`盈利 ${fmtNum(num("pc_tier1_profit"), 0)} 平 ${num("pc_tier1_close_pct")}% · 盈利 ${fmtNum(num("pc_tier2_profit"), 0)} 再平 ${num("pc_tier2_close_pct")}% · 保本缓冲 ${num("pc_breakeven_buffer")}%`} />
+          )}
+        </ViewSection>
+
+        {/* 五、行情过滤 */}
+        <ViewSection title="五、行情过滤">
+          <div className="metric-grid">
+            <ViewMetric label="行情过滤" value={mf.enabled === false ? "关闭" : "开启"} tone={mf.enabled === false ? "bad" : "good"} />
+            <ViewMetric label="最低环境评分" value={typeof mf.min_environment_score === "number" ? String(mf.min_environment_score) : "--"} />
+          </div>
+          <ViewRow label="趋势要求" value={<ViewChips items={(mf.trends ?? []).map((t) => TREND_LABELS[t] ?? t)} />} />
+          <ViewRow label="波动要求" value={<ViewChips items={mf.volatilities ?? []} />} />
+          <ViewRow label="成交量要求" value={<ViewChips items={mf.volume_states ?? []} />} />
+          <ViewRow label="大周期方向" value={<ViewChips items={(mf.macro_directions ?? []).map((d) => (d === "up" ? "向上" : d === "down" ? "向下" : d))} />} />
+          <ViewRow
+            label="多周期方向"
+            value={Object.keys(mf.mtf_directions ?? {}).length
+              ? <ViewChips items={Object.entries(mf.mtf_directions ?? {}).map(([tf, dirs]) => `${tf}：${dirs}`)} />
+              : <span style={{ color: "var(--muted)" }}>无额外限制</span>}
+          />
+        </ViewSection>
+
+        {/* 六、运行实况 */}
+        <ViewSection title="六、运行实况">
+          {scan ? (
+            <>
+              <ViewRow label="最近扫描" value={`${scan.symbol ?? "--"} ${scan.timeframe ?? ""} · ${scan.regime ?? "--"} · 已扫描 ${scan.scanned ?? 0} 个因子`} />
+              {scan.regime_detail && <ViewRow label="环境解读" value={scan.regime_detail} />}
+              {scan.macro_trend && <ViewRow label="大周期方向" value={scan.macro_trend === "up" ? "向上" : scan.macro_trend === "down" ? "向下" : String(scan.macro_trend)} />}
+              {(scan.errors ?? []).length > 0 && (
+                <ViewRow label="扫描错误" value={<span style={{ color: "var(--red)" }}>{(scan.errors ?? []).join("；")}</span>} />
+              )}
+              {(scan.candidates ?? []).length > 0 ? (
+                <div style={{ marginTop: 6, display: "flex", flexDirection: "column", gap: 4 }}>
+                  <div style={{ fontSize: 11, color: "var(--muted)" }}>候选信号（按置信度排序，最多显示 5 条）</div>
+                  {[...(scan.candidates ?? [])]
+                    .sort((a, b) => b.confidence - a.confidence)
+                    .slice(0, 5)
+                    .map((c) => (
+                      <div className="trade-row" key={c.factor_id} style={{ gridTemplateColumns: "1fr auto auto" }}>
+                        <div className="t-value" style={{ fontWeight: 500 }}>{c.factor_name}</div>
+                        <div className="t-label" style={{ color: c.signal === "long" ? "var(--green)" : c.signal === "short" ? "var(--red)" : "var(--muted)" }}>{SIGNAL_LABELS[c.signal] ?? c.signal}</div>
+                        <div className="t-label">置信度 {c.confidence.toFixed(2)}</div>
+                      </div>
+                    ))}
+                </div>
+              ) : (
+                <ViewRow label="候选信号" value={<span style={{ color: "var(--muted)" }}>暂无（没有因子给出有效信号）</span>} />
+              )}
+            </>
+          ) : (
+            <ViewRow label="最近扫描" value={<span style={{ color: "var(--muted)" }}>暂无数据</span>} />
+          )}
+          {state?.last_market_skip && (
+            <ViewRow
+              label="最近跳过开仓"
+              value={<span style={{ color: "var(--amber)" }}>{fmtClock(state.last_market_skip.time)} · {state.last_market_skip.reason || state.last_market_skip.label || "--"}</span>}
+            />
+          )}
+          {(state?.last_executions ?? []).length > 0 && (
+            <div style={{ marginTop: 6, display: "flex", flexDirection: "column", gap: 4 }}>
+              <div style={{ fontSize: 11, color: "var(--muted)" }}>最近执行明细</div>
+              {(state?.last_executions ?? []).slice(0, 5).map((ex) => (
+                <div className="trade-row" key={ex.order_id || ex.time} style={{ gridTemplateColumns: "1fr auto", rowGap: 2 }}>
+                  <div style={{ minWidth: 0 }}>
+                    <div className="t-value" style={{ fontWeight: 500 }}>{fmtClock(ex.time)} · {ex.factor_name}</div>
+                    <div className="t-label" style={{ marginTop: 2 }}>
+                      {SIDE_LABELS[ex.side] ?? ex.side} {ex.lots} 手 · 止损 {fmtNum(ex.stop)} · 止盈 {fmtNum(ex.take)} · 置信度 {ex.confidence.toFixed(2)}
+                      {ex.mirror && (
+                        <span className="badge" style={{ marginLeft: 6, color: "var(--amber)", borderColor: "var(--amber)" }}>
+                          镜像 · 原始信号{SIGNAL_LABELS[ex.raw_signal ?? ""] ?? ex.raw_signal ?? ""}
+                        </span>
+                      )}
+                    </div>
+                  </div>
+                  <div className="t-label">#{ex.order_id}</div>
+                </div>
+              ))}
+            </div>
+          )}
+          {(state?.executor_failures ?? []).length > 0 && (
+            <ViewRow
+              label="最近失败"
+              value={<span style={{ color: "var(--red)" }}>{(state?.executor_failures ?? []).map((f) => `${fmtClock(f.time)} ${f.factor_name}：${f.error}`).join("；")}</span>}
+            />
+          )}
+        </ViewSection>
+
+        <div className="row-actions" style={{ marginTop: 12 }}>
+          <button className="mini-btn" onClick={onClose}>关闭</button>
+        </div>
+      </div>
+    </div>
+  );
+}
 const AI_ROLE_OPTIONS: Array<[string, string]> = [
   ["factor_learning", "K线框选学习"],
   ["market_monitor", "实时形态监控"],
@@ -174,6 +450,8 @@ function computeRegionStats(bars: Bar[], selection: Selection): RegionStats {
 export default function App() {
   const [symbol, setSymbol] = useState("EURUSD");
   const [symbols, setSymbols] = useState<string[]>(["EURUSD"]);
+  // 交易所：mt5=外汇/贵金属；okx=加密（决定品种列表、K 线来源与交易面板）
+  const [venue, setVenue] = useState<"mt5" | "okx">("mt5");
   // 顶部行情显示：MT5 tick 实时推送（符号切换时重置涨跌基线）
   const [topTick, setTopTick] = useState<Mt5Tick | null>(null);
   const [tickDir, setTickDir] = useState<"up" | "down" | "flat">("flat");
@@ -202,6 +480,11 @@ export default function App() {
   const [paperJobs, setPaperJobs] = useState<Array<Record<string, unknown>>>([]);
   const [alerts, setAlerts] = useState<Alert[]>([]);
   const [systemState, setSystemState] = useState<SystemState | null>(null);
+  const [mirrorOn, setMirrorOn] = useState(false);
+  const [mirrorScope, setMirrorScope] = useState<"all" | "long" | "short">("all");
+  const [mirrorBusy, setMirrorBusy] = useState(false);
+  const [tradeDirection, setTradeDirection] = useState<"both" | "long" | "short">("both");
+  const [directionBusy, setDirectionBusy] = useState(false);
   const [aiStatus, setAiStatus] = useState<AiStatus | null>(null);
   const [aiDialog, setAiDialog] = useState(false);
   const [aiEditingId, setAiEditingId] = useState<string | null>(null);
@@ -272,6 +555,12 @@ export default function App() {
   const [tradeStats, setTradeStats] = useState<TradeStatsResult | null>(null);
   const [tab, setTab] = useState<MainTab>("factors");
   const [subTab, setSubTab] = useState<SubTab>("mark");
+  // 整页视图："" = 主界面；"vpattern" = K 线形态独立页面（用 URL hash 承载，可刷新/后退）
+  const [page, setPage] = useState<string>(() => (window.location.hash === "#vpattern" ? "vpattern" : ""));
+  const openVPatternPage = () => {
+    window.location.hash = "vpattern";
+    setPage("vpattern");
+  };
   const [toast, setToast] = useState<{ type: "success" | "error"; message: string } | null>(null);
   const [busy, setBusy] = useState(false);
   const [selectedFactor, setSelectedFactor] = useState<Factor | null>(null);
@@ -434,7 +723,10 @@ export default function App() {
 
   const loadBars = useCallback(async () => {
     try {
-      const data = await api.mt5Klines(symbol, timeframe, 500);
+      // 加密品种走统一交易所路由（内部会按 symbol 选 OKX 网关），外汇仍走 MT5
+      const data = venue === "okx"
+        ? await api.brokerKlines(symbol, timeframe, 500)
+        : await api.mt5Klines(symbol, timeframe, 500);
       setBars(data.bars);
       api.indicators(symbol, timeframe, 500).then(setIndicators).catch(() => {
         // 指标加载失败不影响主图
@@ -442,16 +734,22 @@ export default function App() {
     } catch (err) {
       notify("error", String(err instanceof Error ? err.message : err));
     }
-  }, [symbol, timeframe, notify]);
+  }, [symbol, timeframe, venue, notify]);
 
   const loadSymbols = useCallback(async () => {
     try {
-      const res = await api.mt5Symbols();
-      setSymbols(res.symbols.length ? res.symbols : ["EURUSD"]);
+      if (venue === "okx") {
+        const res = await api.brokerSymbols("okx");
+        const list = (res.symbols || []).map((s) => s.symbol);
+        setSymbols(list.length ? list : ["BTC-USDT-SWAP"]);
+      } else {
+        const res = await api.mt5Symbols();
+        setSymbols(res.symbols.length ? res.symbols : ["EURUSD"]);
+      }
     } catch (err) {
       notify("error", String(err instanceof Error ? err.message : err));
     }
-  }, [notify]);
+  }, [venue, notify]);
 
   const loadMarketAnalysis = useCallback(async () => {
     try {
@@ -509,6 +807,15 @@ export default function App() {
   const loadSystem = useCallback(async () => {
     try {
       setSystemState(await api.systemState());
+    } catch {
+      // 忽略
+    }
+    try {
+      const st = await api.executorState();
+      const cfg = (st.config ?? {}) as Record<string, unknown>;
+      setMirrorOn(Boolean(cfg.mirror));
+      setMirrorScope((String(cfg.mirror_scope || "all") as "all" | "long" | "short"));
+      setTradeDirection((String(cfg.direction || "both") as "both" | "long" | "short"));
     } catch {
       // 忽略
     }
@@ -1153,6 +1460,49 @@ export default function App() {
       notify("error", String(err instanceof Error ? err.message : err));
     }
   }, [matcherForm, notify, loadSystem]);
+
+  const handleMirrorToggle = useCallback(async () => {
+    setMirrorBusy(true);
+    try {
+      const result = await api.setMirror(!mirrorOn, mirrorScope);
+      setMirrorOn(result.mirror);
+      setMirrorScope(result.scope as "all" | "long" | "short");
+      notify("success", result.message);
+    } catch (err) {
+      notify("error", `镜像开关失败：${String(err instanceof Error ? err.message : err)}`);
+    } finally {
+      setMirrorBusy(false);
+    }
+  }, [mirrorOn, mirrorScope, notify]);
+
+  const handleMirrorScope = useCallback(async (scope: "all" | "long" | "short") => {
+    setMirrorScope(scope);
+    if (!mirrorOn) return;
+    setMirrorBusy(true);
+    try {
+      const result = await api.setMirror(true, scope);
+      setMirrorOn(result.mirror);
+      notify("success", result.message);
+    } catch (err) {
+      notify("error", `镜像范围切换失败：${String(err instanceof Error ? err.message : err)}`);
+    } finally {
+      setMirrorBusy(false);
+    }
+  }, [mirrorOn, notify]);
+
+  const handleDirection = useCallback(async (direction: "both" | "long" | "short") => {
+    setTradeDirection(direction);
+    setDirectionBusy(true);
+    try {
+      const result = await api.setDirection(direction);
+      setTradeDirection(result.direction as "both" | "long" | "short");
+      notify("success", result.message);
+    } catch (err) {
+      notify("error", `交易方向切换失败：${String(err instanceof Error ? err.message : err)}`);
+    } finally {
+      setDirectionBusy(false);
+    }
+  }, [notify]);
 
   const handleExecutorScan = useCallback(async () => {
     setBusy(true);
@@ -1929,6 +2279,16 @@ export default function App() {
     loadMarketAnalysis();
   }, [loadBars, loadSnapshot, loadSymbols, loadFactors, loadAlerts, loadPaper, loadSystem, loadAiStatus, loadTrades, loadSmartStop, loadSltpStrategies, loadMarketAnalysis]);
 
+  // 切换交易所时同步换成该交易所的默认品种，避免拿 EURUSD 去查 OKX（或反过来）
+  useEffect(() => {
+    setSymbol((prev) => {
+      const looksLikeOkx = /-/.test(prev);
+      if (venue === "okx" && !looksLikeOkx) return "BTC-USDT-SWAP";
+      if (venue === "mt5" && looksLikeOkx) return "EURUSD";
+      return prev;
+    });
+  }, [venue]);
+
   useEffect(() => {
     let ws: WebSocket | null = null;
     try {
@@ -2019,6 +2379,13 @@ export default function App() {
     loadTradeStats();
   }, [loadTradeStats]);
 
+  // K 线形态独立页：hash 变更时同步整页视图（支持浏览器后退）
+  useEffect(() => {
+    const onHash = () => setPage(window.location.hash === "#vpattern" ? "vpattern" : "");
+    window.addEventListener("hashchange", onHash);
+    return () => window.removeEventListener("hashchange", onHash);
+  }, []);
+
   useEffect(() => {
     if (tab === "replay" && subTab === "stats") {
       loadFactorStats();
@@ -2027,12 +2394,33 @@ export default function App() {
 
   const metric = backtest?.metrics;
 
+  if (page === "vpattern") {
+    return (
+      <>
+        <VPatternPage
+          onNotify={notify}
+          onBack={() => {
+            window.location.hash = "";
+            setPage("main");
+          }}
+        />
+        {toast && <div className={`toast ${toast.type}`}>{toast.message}</div>}
+      </>
+    );
+  }
+
   return (
     <div className="app">
       <header className="topbar">
         <div className="brand">
           <span className="brand-mark"><Bot size={17} /></span>
           外汇 AI 量化交易系统
+        </div>
+        <div className="select-wrap" title="交易所">
+          <select value={venue} onChange={(e) => setVenue(e.target.value as "mt5" | "okx")}>
+            <option value="mt5">MT5 外汇</option>
+            <option value="okx">OKX 加密</option>
+          </select>
         </div>
         <SymbolSearchSelect symbols={symbols} value={symbol} onChange={setSymbol} />
         <div className="select-wrap">
@@ -2173,6 +2561,7 @@ export default function App() {
             <button className={`tab ${tab === "replay" ? "active" : ""}`} onClick={() => { setTab("replay"); setSubTab("replay"); }}><FileText size={14} /> 复盘与日志</button>
             <button className={`tab ${tab === "ai" ? "active" : ""}`} onClick={() => setTab("ai")}><Cpu size={14} /> AI 管理</button>
             <button className={`tab ${tab === "calendar" ? "active" : ""}`} onClick={() => setTab("calendar")}><Calendar size={14} /> 收益日历</button>
+            <button className="tab" onClick={openVPatternPage} title="打开独立的 K 线形态交易页面"><TrendingUp size={14} /> K线形态 ↗</button>
           </div>
 
           <div className="panel-body">
@@ -2462,6 +2851,7 @@ export default function App() {
                 <button className={`sub-tab ${subTab === "signals" ? "active" : ""}`} onClick={() => setSubTab("signals")}>信号与执行</button>
                 <button className={`sub-tab ${subTab === "mt5" ? "active" : ""}`} onClick={() => setSubTab("mt5")}>实盘下单</button>
                 <button className={`sub-tab ${subTab === "sltp" ? "active" : ""}`} onClick={() => setSubTab("sltp")}>止损止盈</button>
+                <button className={`sub-tab ${subTab === "okx-setup" ? "active" : ""}`} onClick={() => setSubTab("okx-setup")}>欧易 API</button>
               </div>
             )}
             {tab === "trading" && subTab === "signals" && (
@@ -2504,6 +2894,56 @@ export default function App() {
                     <p className="factor-desc">{String(marketAnalysis.detail ?? "")}</p>
                   </div>
                 )}
+                <div className="tool-block">
+                  <h3><Shield size={13} /> 交易方向过滤</h3>
+                  <p className="factor-desc">
+                    被屏蔽方向的信号在执行前直接过滤掉，不占用仓位、不付成本。
+                    实测多单腿 43 笔 −1463.62（PF 0.87）、空单腿 41 笔 +1116.13（PF 1.20），
+                    屏蔽多单可保留空单腿、且不会像镜像那样把成本翻倍。
+                  </p>
+                  <div className="row-actions">
+                    <select
+                      value={tradeDirection}
+                      disabled={directionBusy}
+                      onChange={(e) => void handleDirection(e.target.value as "both" | "long" | "short")}
+                    >
+                      <option value="both">双向都做</option>
+                      <option value="long">只做多（屏蔽空单）</option>
+                      <option value="short">只做空（屏蔽多单）</option>
+                    </select>
+                    <span className={`value ${tradeDirection === "both" ? "" : "bad"}`} style={{ fontSize: 12 }}>
+                      {tradeDirection === "both" ? "当前：双向" : tradeDirection === "long" ? "当前：只做多" : "当前：只做空"}
+                    </span>
+                  </div>
+                </div>
+                <div className="tool-block">
+                  <h3><Repeat size={13} /> 镜像交易（对手盘）</h3>
+                  <p className="factor-desc">
+                    开启后方向取反、止损与止盈距离互换：挂出去的止损价正好落在原单的止盈价上，
+                    等于原单的对手盘。注意成本不会跟着翻 —— 每笔要多付一次点差和佣金。
+                  </p>
+                  <div className="row-actions">
+                    <button
+                      className={`mini-btn ${mirrorOn ? "primary" : ""}`}
+                      disabled={mirrorBusy}
+                      onClick={handleMirrorToggle}
+                    >
+                      <Repeat size={12} /> {mirrorOn ? "关闭镜像" : "开启镜像"}
+                    </button>
+                    <select
+                      value={mirrorScope}
+                      disabled={mirrorBusy}
+                      onChange={(e) => void handleMirrorScope(e.target.value as "all" | "long" | "short")}
+                    >
+                      <option value="all">全部信号都镜像</option>
+                      <option value="long">只镜像多单信号</option>
+                      <option value="short">只镜像空单信号</option>
+                    </select>
+                    <span className={`value ${mirrorOn ? "bad" : "good"}`} style={{ fontSize: 12 }}>
+                      {mirrorOn ? "镜像已开启" : "镜像已关闭"}
+                    </span>
+                  </div>
+                </div>
                 <div className="tool-block">
                   <h3><Bot size={13} /> AI 自动执行</h3>
                   <div className="metric-grid">
@@ -2586,8 +3026,11 @@ export default function App() {
               </>
             )}
             {tab === "trading" && subTab === "sltp" && <SltpPolicyPanel onNotify={notify} />}
+            {tab === "trading" && subTab === "okx-setup" && <OkxSettings onNotify={notify} />}
             {tab === "trading" && subTab === "mt5" && (
-              <Mt5Panel symbol={symbol} timeframe={timeframe} />
+              venue === "okx"
+                ? <OkxPanel symbol={symbol} timeframe={timeframe} onNotify={notify} />
+                : <Mt5Panel symbol={symbol} timeframe={timeframe} />
             )}
             {tab === "replay" && subTab === "replay" && (
               <>
@@ -3364,30 +3807,7 @@ export default function App() {
           </div>
         </div>
       )}
-      {matcherViewOpen && (
-        <div className="modal-overlay">
-          <div className="modal" style={{ width: 720, maxHeight: "86vh", overflow: "auto" }}>
-            <h3><Eye size={14} /> 当前实盘匹配参数</h3>
-            <div className="metric-grid">
-              <div className="metric"><div className="label">运行状态</div><div className={`value ${systemState?.matcher_running ? "good" : "bad"}`}>{systemState?.matcher_running ? "运行中" : "已暂停"}</div></div>
-              <div className="metric"><div className="label">品种</div><div className="value">{systemState?.matcher_symbol || "--"}</div></div>
-              <div className="metric"><div className="label">周期</div><div className="value">{systemState?.matcher_timeframe || "--"}</div></div>
-              <div className="metric"><div className="label">最大持仓</div><div className="value">{systemState?.max_positions ?? "--"}</div></div>
-            </div>
-            <div style={{ display: "flex", flexDirection: "column", gap: 4, marginTop: 8 }}>
-              {Object.entries(systemState?.executor_config ?? {}).filter(([key]) => !MATCHER_HIDDEN_KEYS.has(key)).map(([key, value]) => (
-                <div className="trade-row" key={key} style={{ flexWrap: "wrap" }}>
-                  <div className="t-label" style={{ minWidth: 180 }}>{MATCHER_LABELS[key] || key}</div>
-                  <div className="t-value">{Array.isArray(value) ? value.join("、") : String(value)}</div>
-                </div>
-              ))}
-            </div>
-            <div className="row-actions" style={{ marginTop: 10 }}>
-              <button className="mini-btn" onClick={() => setMatcherViewOpen(false)}>关闭</button>
-            </div>
-          </div>
-        </div>
-      )}
+      {matcherViewOpen && <MatcherViewPanel state={systemState} onClose={() => setMatcherViewOpen(false)} />}
       {orderChatChoiceOpen && (
         <div className="modal-overlay">
           <div className="modal" style={{ width: 520 }}>

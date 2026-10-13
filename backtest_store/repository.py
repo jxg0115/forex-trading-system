@@ -280,9 +280,59 @@ class AiConfigRecord(Base):
     )
 
 
+class VPatternStateRecord(Base):
+    """K 线形态独立模块的单例状态：开关 + 风险参数 + 运行时计数。
+
+    独立于 system_states，避免与主系统互相覆盖。
+    """
+
+    __tablename__ = "vpattern_state"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, default=1)
+    enabled: Mapped[bool] = mapped_column(default=False)
+    config: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        default=lambda: datetime.now(timezone.utc),
+        onupdate=lambda: datetime.now(timezone.utc),
+    )
+
+
+class VPatternTradeRecord(Base):
+    """K 线形态独立账本：只记本模块自己下的单，与 trades/order_logs 隔离。"""
+
+    __tablename__ = "vpattern_trades"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    ticket: Mapped[str] = mapped_column(String(32), default="", index=True)
+    symbol: Mapped[str] = mapped_column(String(32), default="", index=True)
+    side: Mapped[str] = mapped_column(String(8), default="")
+    lots: Mapped[float] = mapped_column(default=0.0)
+    entry_price: Mapped[float] = mapped_column(default=0.0)
+    sl: Mapped[float | None] = mapped_column(nullable=True)
+    tp: Mapped[float | None] = mapped_column(nullable=True)
+    atr: Mapped[float] = mapped_column(default=0.0)
+    risk_amount: Mapped[float] = mapped_column(default=0.0)
+    signal_time: Mapped[str] = mapped_column(String(40), default="")
+    open_time: Mapped[str] = mapped_column(String(40), default="")
+    close_time: Mapped[str] = mapped_column(String(40), default="")
+    close_price: Mapped[float | None] = mapped_column(nullable=True)
+    pnl: Mapped[float | None] = mapped_column(nullable=True)
+    r_multiple: Mapped[float | None] = mapped_column(nullable=True)
+    exit_reason: Mapped[str] = mapped_column(String(24), default="")
+    status: Mapped[str] = mapped_column(String(16), default="open", index=True)
+    note: Mapped[str] = mapped_column(String(500), default="")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        default=lambda: datetime.now(timezone.utc),
+        onupdate=lambda: datetime.now(timezone.utc),
+    )
+
+
 _engine = create_engine(settings.database_url, connect_args={"check_same_thread": False} if settings.database_url.startswith("sqlite") else {})
 _SessionLocal = sessionmaker(bind=_engine, autoflush=False, expire_on_commit=False)
-
 
 def _ensure_schema() -> None:
     """兼容旧库：为 order_logs 补充新增列。"""
@@ -437,6 +487,157 @@ class FactorRepository:
         if not record:
             return None
         return record.sltp_policy or None
+
+    # ---------- K 线形态独立模块（vpattern） ----------
+
+    def save_vpattern_state(self, config: dict[str, Any], enabled: bool | None = None) -> None:
+        """持久化 K 线形态模块的开关与配置。"""
+
+        record = self.session.get(VPatternStateRecord, 1)
+        if record is None:
+            record = VPatternStateRecord(
+                id=1,
+                enabled=bool(config.get("enabled", False)) if enabled is None else bool(enabled),
+                config=config,
+            )
+            self.session.add(record)
+        else:
+            record.config = config
+            if enabled is not None:
+                record.enabled = bool(enabled)
+            elif "enabled" in config:
+                record.enabled = bool(config["enabled"])
+            record.updated_at = datetime.now(timezone.utc)
+        self.session.commit()
+
+    def get_vpattern_state(self) -> dict[str, Any] | None:
+        record = self.session.get(VPatternStateRecord, 1)
+        if not record:
+            return None
+        return {"enabled": bool(record.enabled), "config": record.config or {}}
+
+    def save_vpattern_trade(self, record_data: dict[str, Any]) -> None:
+        """写入一笔 K 线形态交易（开仓时 status=open）。"""
+
+        record = VPatternTradeRecord(
+            id=str(record_data.get("id") or uuid.uuid4()),
+            ticket=str(record_data.get("ticket") or ""),
+            symbol=str(record_data.get("symbol") or ""),
+            side=str(record_data.get("side") or ""),
+            lots=float(record_data.get("lots") or 0.0),
+            entry_price=float(record_data.get("entry_price") or 0.0),
+            sl=record_data.get("sl"),
+            tp=record_data.get("tp"),
+            atr=float(record_data.get("atr") or 0.0),
+            risk_amount=float(record_data.get("risk_amount") or 0.0),
+            signal_time=str(record_data.get("signal_time") or ""),
+            open_time=str(record_data.get("open_time") or ""),
+            status=str(record_data.get("status") or "open"),
+            note=str(record_data.get("note") or ""),
+        )
+        self.session.add(record)
+        self.session.commit()
+
+    def close_vpattern_trade(self, ticket: str, close_price: float, pnl: float,
+                             r_multiple: float | None = None, exit_reason: str = "",
+                             close_time: str = "") -> None:
+        """按 ticket 标记一笔 K 线形态交易已平仓。"""
+
+        row = (
+            self.session.query(VPatternTradeRecord)
+            .filter(VPatternTradeRecord.ticket == str(ticket))
+            .order_by(VPatternTradeRecord.created_at.desc())
+            .first()
+        )
+        if not row:
+            return
+        row.close_price = float(close_price)
+        row.pnl = float(pnl)
+        row.r_multiple = r_multiple
+        row.exit_reason = exit_reason
+        row.close_time = close_time or datetime.now(timezone.utc).isoformat()
+        row.status = "closed"
+        row.updated_at = datetime.now(timezone.utc)
+        self.session.commit()
+
+    def list_vpattern_trades(self, limit: int = 200, status: str | None = None) -> list[dict[str, Any]]:
+        query = self.session.query(VPatternTradeRecord)
+        if status:
+            query = query.filter(VPatternTradeRecord.status == status)
+        rows = query.order_by(VPatternTradeRecord.created_at.desc()).limit(limit).all()
+        return [
+            {
+                "id": r.id, "ticket": r.ticket, "symbol": r.symbol, "side": r.side,
+                "lots": r.lots, "entry_price": r.entry_price, "sl": r.sl, "tp": r.tp,
+                "atr": r.atr, "risk_amount": r.risk_amount, "signal_time": r.signal_time,
+                "open_time": r.open_time, "close_time": r.close_time,
+                "close_price": r.close_price, "pnl": r.pnl, "r_multiple": r.r_multiple,
+                "exit_reason": r.exit_reason, "status": r.status, "note": r.note,
+                "created_at": r.created_at.isoformat() if r.created_at else "",
+            }
+            for r in rows
+        ]
+
+    def vpattern_stats(self) -> dict[str, Any]:
+        """K 线形态独立统计：笔数/胜率/盈亏比/累计 PnL/最大回撤（按 R 口径）。"""
+
+        rows = self.list_vpattern_trades(limit=10000)
+        closed = [r for r in rows if r["status"] == "closed" and r["r_multiple"] is not None]
+        open_n = sum(1 for r in rows if r["status"] == "open")
+        if not closed:
+            return {"n": 0, "open": open_n, "win_rate": None, "profit_factor": None,
+                    "total_r": 0.0, "total_pnl": 0.0, "max_dd_r": 0.0}
+        rs = [float(r["r_multiple"]) for r in closed]
+        wins = [x for x in rs if x > 0]
+        losses = [x for x in rs if x < 0]
+        gross_win = sum(wins)
+        gross_loss = -sum(losses)
+        cum = 0.0
+        peak = 0.0
+        dd = 0.0
+        for x in rs:
+            cum += x
+            peak = max(peak, cum)
+            dd = min(dd, cum - peak)
+        return {
+            "n": len(closed),
+            "open": open_n,
+            "win_rate": round(len(wins) / len(closed) * 100, 1),
+            "profit_factor": round(gross_win / gross_loss, 2) if gross_loss > 0 else None,
+            "total_r": round(sum(rs), 2),
+            "total_pnl": round(sum(float(r["pnl"] or 0.0) for r in closed), 2),
+            "max_dd_r": round(dd, 2),
+            "n_long": sum(1 for r in closed if r["side"] == "long"),
+            "n_short": sum(1 for r in closed if r["side"] == "short"),
+        }
+
+    def vpattern_daily(self) -> list[dict[str, Any]]:
+        """K 线形态按日聚合（按开仓日，UTC）：笔数/盈亏/R/胜率。"""
+
+        rows = self.list_vpattern_trades(limit=10000)
+        buckets: dict[str, dict[str, Any]] = {}
+        for r in rows:
+            ts = str(r.get("open_time") or r.get("signal_time") or r.get("created_at") or "")[:10]
+            if not ts:
+                continue
+            b = buckets.setdefault(ts, {"date": ts, "n": 0, "open": 0, "win": 0, "r": 0.0, "pnl": 0.0})
+            if r.get("status") == "open":
+                b["open"] += 1
+                continue
+            if r.get("r_multiple") is None:
+                continue
+            b["n"] += 1
+            if float(r["r_multiple"]) > 0:
+                b["win"] += 1
+            b["r"] += float(r["r_multiple"])
+            b["pnl"] += float(r.get("pnl") or 0.0)
+        out = []
+        for d in sorted(buckets.values(), key=lambda x: x["date"], reverse=True):
+            d["r"] = round(d["r"], 2)
+            d["pnl"] = round(d["pnl"], 2)
+            d["win_rate"] = round(d["win"] / d["n"] * 100, 1) if d["n"] else None
+            out.append(d)
+        return out
 
     # ---------- 因子挖掘候选池 ----------
 

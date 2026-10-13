@@ -1,0 +1,11 @@
+﻿factor_name,origin_symbol,crypto_symbol,timeframe,bars,entry_signals,exit_signals,num_trades,total_return_pct,win_rate_pct,profit_factor,max_drawdown_pct,sharpe,buy_hold_pct,origin_return_pct,origin_win_rate_pct,origin_profit_factor,origin_num_trades,exec_ms
+布林触轨离场（exit/base）,XAUUSD,BTC-USDT-SWAP,M30,1500,0,27,0,0.0,0.0,0.0,0.0,0.0,7.72,,,,,966.9
+布林触轨离场（exit/base）,XAUUSD,ETH-USDT-SWAP,M30,1500,0,34,0,0.0,0.0,0.0,0.0,0.0,20.96,,,,,524.1
+布林触轨离场（exit/base）,XAUUSD,BTC-USDT-SWAP,M30,1500,0,25,0,0.0,0.0,0.0,0.0,0.0,7.72,,,,,517.8
+布林触轨离场（exit/base）,XAUUSD,ETH-USDT-SWAP,M30,1500,0,30,0,0.0,0.0,0.0,0.0,0.0,20.96,,,,,498.7
+AI 学习因子_XAUUSD_M30,XAUUSD,BTC-USDT-SWAP,M30,1500,37,5,25,0.2137,32.0,1.031,8.9354,0.228,7.72,3.2162,46.15,1.824,13,505.6
+AI 学习因子_XAUUSD_M30,XAUUSD,ETH-USDT-SWAP,M30,1500,38,7,26,-5.9973,34.62,0.676,7.1853,-2.851,20.96,3.2162,46.15,1.824,13,501.5
+AI 顺势突破因子_74根K线,XAUUSD,BTC-USDT-SWAP,M30,1500,177,7,41,-3.2153,34.15,0.914,10.6999,-0.868,7.72,160.1848,29.9,1.07,2732,551.0
+AI 顺势突破因子_74根K线,XAUUSD,ETH-USDT-SWAP,M30,1500,149,11,40,-6.7159,27.5,0.786,15.0997,-2.279,20.96,160.1848,29.9,1.07,2732,509.9
+波动扩张因子_GOLD_M30,XAUUSD,BTC-USDT-SWAP,M30,1500,270,0,28,-5.0056,28.57,0.804,16.4138,-1.803,7.72,108.7574,30.88,1.089,1522,536.1
+波动扩张因子_GOLD_M30,XAUUSD,ETH-USDT-SWAP,M30,1500,280,0,31,4.335,35.48,1.212,11.2048,1.627,20.96,108.7574,30.88,1.089,1522,512.4

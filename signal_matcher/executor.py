@@ -26,6 +26,10 @@ class ExecutorRuntimeConfig:
     timeframe: str = "M15"
     min_confidence: float = 0.55
     direction: str = "both"
+    # 镜像交易：翻方向 + 互换止损/止盈距离 = 原单的"对手盘"（同一价格路径下盈亏严格取反，成本除外）。
+    # mirror_scope: all=全部镜像 / long=只镜像多单信号 / short=只镜像空单信号
+    mirror: bool = False
+    mirror_scope: str = "all"
     lot_mode: str = "risk"
     fixed_lots: float = 0.01
     risk_percent: float = 1.0
@@ -213,19 +217,25 @@ class SignalExecutor:
                 if not factor:
                     continue
                 factor_name = factor.name
+            raw_signal = candidate["signal"]
+            mirrored = self._mirrored(raw_signal)
+            # 执行方向 = 原方向取反；但止损/止盈距离仍按"原方向"计算（见 _position 的 mirror 参数），
+            # 这样挂出去的止损价正好落在原单的止盈价上、止盈价落在原单的止损价上，构成精确对手盘。
+            exec_signal = ("short" if raw_signal == "long" else "long") if mirrored else raw_signal
             entry_price = float(bars[-1]["close"])
             atr = self._last_atr(bars) or entry_price * 0.001
             sizing = self._position(
                 config.symbol,
                 entry_price,
                 atr,
-                candidate["signal"],
+                raw_signal,
                 support_levels=candidate.get("support_levels") or [],
                 resistance_levels=candidate.get("resistance_levels") or [],
                 suggested_stop_pct=candidate.get("suggested_stop_pct"),
                 suggested_take_pct=candidate.get("suggested_take_pct"),
+                mirror=mirrored,
             )
-            side = "buy" if candidate["signal"] == "long" else "sell"
+            side = "buy" if exec_signal == "long" else "sell"
             try:
                 idempotency_key = (
                     f"exec:{factor_id}:{config.symbol}:{config.timeframe}:"
@@ -240,7 +250,7 @@ class SignalExecutor:
                         take_price=sizing["take_price"],
                         factor_id=factor_id,
                         factor_name=factor_name,
-                        reason="AI 自动执行",
+                        reason="AI 自动执行[镜像]" if mirrored else "AI 自动执行",
                         idempotency_key=idempotency_key,
                     ),
                     timeout=15.0,
@@ -282,6 +292,8 @@ class SignalExecutor:
                 "take": sizing["take_price"],
                 "confidence": candidate["confidence"],
                 "order_id": order.id,
+                "mirror": mirrored,
+                "raw_signal": raw_signal,
             }
             self.last_executions.insert(0, record)
             self.last_executions = self.last_executions[:20]
@@ -295,6 +307,15 @@ class SignalExecutor:
             )
         return executed
 
+    def _mirrored(self, signal: str) -> bool:
+        """该信号本次是否要走镜像单。"""
+        if not self.config.mirror:
+            return False
+        scope = str(self.config.mirror_scope or "all").lower()
+        if scope == "all":
+            return True
+        return scope == signal
+
     def _position(
         self,
         symbol: str,
@@ -305,6 +326,7 @@ class SignalExecutor:
         resistance_levels: list[float] | None = None,
         suggested_stop_pct: float | None = None,
         suggested_take_pct: float | None = None,
+        mirror: bool = False,
     ) -> dict[str, Any]:
         config = self.config
         sign = 1.0 if direction == "long" else -1.0
@@ -333,6 +355,11 @@ class SignalExecutor:
             stop_dist = entry_price * 0.005
         if take_dist <= 0:
             take_dist = stop_dist * 1.5
+        if mirror:
+            # 对手盘：止损距离换成原止盈距离、止盈距离换成原止损距离，方向反号。
+            # 必须在算手数之前交换 —— 手数是按"真实止损距离"反算的，否则每笔风险会算错。
+            stop_dist, take_dist = take_dist, stop_dist
+            sign = -sign
 
         if config.lot_mode == "fixed":
             lots = max(min_lot, min(max_lot, config.fixed_lots))

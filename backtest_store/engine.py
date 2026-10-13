@@ -107,6 +107,12 @@ class Backtester:
             hw_enabled = False
             hw_activation_r = 0.0
             hw_retrace_atr = 0.0
+        # 动态档默认值：先按固定档初始化，后面若启用阶梯/高点回撤再被覆盖。
+        # （此前这三个变量只在 ladder_enabled/hw_enabled 分支内赋值，而 316 行的时间止损
+        #   是无条件读取 dyn_max_hold 的，默认参数下必抛 UnboundLocalError，回测整个崩掉。）
+        dyn_max_hold = max_hold
+        dyn_hw_r = hw_activation_r
+        dyn_tiers = ladder_tiers
         commission = float(p["commission_pct"])
         delay_bars = max(int(p["execution_delay_bars"]), 0)
 
