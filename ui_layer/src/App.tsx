@@ -2,16 +2,13 @@ import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } fro
 import {
   Activity,
   AlertTriangle,
-  Ban,
   BarChart3,
   Bell,
-  BoxSelect,
   Bot,
   Cable,
   CheckCircle2,
   Cpu,
   Calendar,
-  Clock,
   Eye,
   FileText,
   FileClock,
@@ -32,10 +29,8 @@ import {
   FlaskConical,
   Trash2,
   TrendingUp,
-  Undo2,
   Wallet,
   Wand2,
-  X,
 } from "lucide-react";
 import { KLineChart, type ChartMode, type ModelSignal } from "./components/KLineChart";
 import { FactorEditModal } from "./components/FactorEditModal";
@@ -46,10 +41,12 @@ import { VPatternPage } from "./components/VPatternPage";
 import { OrderLogPanel } from "./components/OrderLogPanel";
 import { FactorMiningPanel } from "./components/FactorMiningPanel";
 
-import { MarketStatusPanel } from "./components/MarketStatusPanel";
 import { CalendarPanel } from "./components/CalendarPanel";
 import { SltpPolicyPanel } from "./components/SltpPolicyPanel";
 import { SymbolSearchSelect } from "./components/SymbolSearchSelect";
+import { ChartDesk } from "./pages/ChartDesk";
+import { useHashPage } from "./hooks/useHashPage";
+import { PAGES, DEFAULT_TAB, VPATTERN_HASH } from "./nav";
 import { api, type AiConfig, type AiStatus, type Alert, type BacktestResult, type Bar, type Factor, type FactorDraft, type FactorPayload, type IndicatorData, type LearnTradeResult, type MarkerPoint, type MatcherCandidate, type MatcherMarketFilter, type Mt5Tick, type OptimizeResult, type Selection, type SystemState, type TradeStatsResult } from "./api";
 
 interface RegionStats {
@@ -67,7 +64,8 @@ interface ScanResult {
   scanned: number;
 }
 
-type MainTab = "factors" | "market" | "trading" | "replay" | "ai" | "sltp" | "mining" | "calendar";
+// 注意：market / sltp 已随整页重构移除（市场状态并入看盘台，止损止盈挂在 trading 下的子标签）
+type MainTab = "factors" | "trading" | "replay" | "ai" | "mining" | "calendar";
 type SubTab = "mark" | "backtest" | "manage" | "signals" | "mt5" | "okx-setup" | "replay" | "orders" | "stats" | "optimize" | "sltp";
 
 const TIMEFRAMES = ["M1", "M5", "M15", "M30", "H1", "H4", "D1"];
@@ -555,12 +553,27 @@ export default function App() {
   const [tradeStats, setTradeStats] = useState<TradeStatsResult | null>(null);
   const [tab, setTab] = useState<MainTab>("factors");
   const [subTab, setSubTab] = useState<SubTab>("mark");
-  // 整页视图："" = 主界面；"vpattern" = K 线形态独立页面（用 URL hash 承载，可刷新/后退）
-  const [page, setPage] = useState<string>(() => (window.location.hash === "#vpattern" ? "vpattern" : ""));
-  const openVPatternPage = () => {
-    window.location.hash = "vpattern";
-    setPage("vpattern");
-  };
+  // 整页路由：由 URL hash 承载（#chart / #strategy / #perf / #system / #vpattern）
+  const { page, go, navSeq } = useHashPage();
+  const openVPatternPage = () => go(VPATTERN_HASH);
+
+  // 跨页安全的子标签跳转：业务回调（如保存因子后跳回因子管理）可能从任意台触发，
+  // 因此必须同时把整页切到目标台，否则内容渲染不出来。
+  const gotoStrategy = useCallback((sub: SubTab) => {
+    setTab("factors");
+    setSubTab(sub);
+    go("strategy");
+  }, [go]);
+  const gotoTrading = useCallback((sub: SubTab) => {
+    setTab("trading");
+    setSubTab(sub);
+    go("strategy");
+  }, [go]);
+  const gotoPerf = useCallback((sub: SubTab) => {
+    setTab("replay");
+    setSubTab(sub);
+    go("perf");
+  }, [go]);
   const [toast, setToast] = useState<{ type: "success" | "error"; message: string } | null>(null);
   const [busy, setBusy] = useState(false);
   const [selectedFactor, setSelectedFactor] = useState<Factor | null>(null);
@@ -1088,8 +1101,7 @@ export default function App() {
       const result = await api.generate(region, chartImage());
       setDraft(result);
       setBacktest(null);
-      setTab("factors");
-      setSubTab("mark");
+      gotoStrategy("mark");
       notify("success", `AI 因子生成完成：${result.name}`);
     } catch (err) {
       notify("error", String(err instanceof Error ? err.message : err));
@@ -1113,8 +1125,7 @@ export default function App() {
         params: draft.params,
       });
       setBacktest(result);
-      setTab("factors");
-      setSubTab("backtest");
+      gotoStrategy("backtest");
       notify("success", result.message);
     } catch (err) {
       notify("error", String(err instanceof Error ? err.message : err));
@@ -1152,8 +1163,7 @@ export default function App() {
         backtest_stats: backtest?.metrics ?? null,
       });
       setSelectedFactor(saved);
-      setTab("factors");
-      setSubTab("manage");
+      gotoStrategy("manage");
       await loadFactors();
       if (selection) {
         try {
@@ -1286,8 +1296,7 @@ export default function App() {
         slippage_points: Number(backtestSettings.slippage) || 0,
       });
       setBacktest(result);
-      setTab("factors");
-      setSubTab("backtest");
+      gotoStrategy("backtest");
       notify("success", result.message);
     } catch (err) {
       notify("error", String(err instanceof Error ? err.message : err));
@@ -1340,8 +1349,7 @@ export default function App() {
         param_ranges: paramRanges,
       });
       setOptimizeResult(result);
-      setTab("factors");
-      setSubTab("backtest");
+      gotoStrategy("backtest");
       notify("success", result.message);
     } catch (err) {
       notify("error", String(err instanceof Error ? err.message : err));
@@ -1369,8 +1377,7 @@ export default function App() {
         slippage_points: Number(backtestSettings.slippage) || 0,
       });
       setBacktest(result);
-      setTab("factors");
-      setSubTab("backtest");
+      gotoStrategy("backtest");
       notify("success", "已应用最佳参数并完成回测");
     } catch (err) {
       notify("error", String(err instanceof Error ? err.message : err));
@@ -1382,8 +1389,7 @@ export default function App() {
   const viewFactor = useCallback(async (factor: Factor) => {
     setSelectedFactor(factor);
     setDraft(factor);
-    setTab("factors");
-    setSubTab("mark");
+    gotoStrategy("mark");
     try {
       const res = await api.sandboxDiagnose({
         code: factor.code,
@@ -2379,30 +2385,32 @@ export default function App() {
     loadTradeStats();
   }, [loadTradeStats]);
 
-  // K 线形态独立页：hash 变更时同步整页视图（支持浏览器后退）
-  useEffect(() => {
-    const onHash = () => setPage(window.location.hash === "#vpattern" ? "vpattern" : "");
-    window.addEventListener("hashchange", onHash);
-    return () => window.removeEventListener("hashchange", onHash);
-  }, []);
-
   useEffect(() => {
     if (tab === "replay" && subTab === "stats") {
       loadFactorStats();
     }
   }, [tab, subTab, loadFactorStats]);
 
+  // 整页切换时同步页内默认子标签。
+  // 用 navSeq 作为「外部导航信号」：只有浏览器后退/前进/手改地址会 +1；
+  // go() 引发的 page 变化不带 navSeq，此时子标签由调用方（顶部导航 / gotoXxx）显式设置。
+  const appliedSeqRef = useRef(-1);
+  useEffect(() => {
+    const isExternal = navSeq !== appliedSeqRef.current;
+    appliedSeqRef.current = navSeq;
+    if (!isExternal) return;
+    const d = DEFAULT_TAB[page];
+    if (d) { setTab(d.tab as MainTab); if (d.sub) setSubTab(d.sub as SubTab); }
+  }, [page, navSeq]);
+
   const metric = backtest?.metrics;
 
-  if (page === "vpattern") {
+  if (page === VPATTERN_HASH) {
     return (
       <>
         <VPatternPage
           onNotify={notify}
-          onBack={() => {
-            window.location.hash = "";
-            setPage("main");
-          }}
+          onBack={() => go("chart")}
         />
         {toast && <div className={`toast ${toast.type}`}>{toast.message}</div>}
       </>
@@ -2472,109 +2480,95 @@ export default function App() {
         </button>
       </header>
 
-      <div className="main">
-        <section className="chart-zone">
-          <div className="action-bar">
-            <button className={`btn ${mode === "select" ? "active" : ""}`} onClick={() => setMode("select")}>
-              <BoxSelect size={14} /> 框选形态
-            </button>
-            <button className={`btn ${mode === "entry" ? "active" : ""}`} onClick={() => setMode("entry")}>
-              <Sparkles size={14} /> 标记入场点
-            </button>
-            <button className={`btn ${mode === "exit" ? "active" : ""}`} onClick={() => setMode("exit")}>
-              <Ban size={14} /> 标记出场点
-            </button>
-            <button className={`btn ${mode === "resistance" ? "active" : ""}`} onClick={() => setMode("resistance")}>
-              <Ban size={14} /> 标记压力位
-            </button>
-            <button className={`btn ${mode === "support" ? "active" : ""}`} onClick={() => setMode("support")}>
-              <Sparkles size={14} /> 标记支撑位
-            </button>
-            <button className="btn" disabled={!selection || supportLevels.length === 0 || resistanceLevels.length === 0} onClick={handleSuggestPoints}>
-              <Sparkles size={14} /> 自动建议入场/出场
-            </button>
-            <button className="btn" onClick={resetSelection}>
-              <RefreshCw size={14} /> 重置框选
-            </button>
-            <button className="btn" disabled={markerHistory.length === 0 && levelHistory.length === 0} onClick={handleUndoMarker}>
-              <Undo2 size={14} /> 撤销标记
-            </button>
-            <button className="btn" disabled={entryPoints.length === 0 && exitPoints.length === 0 && supportLevels.length === 0 && resistanceLevels.length === 0} onClick={handleClearMarkers}>
-              <X size={14} /> 清除标注
-            </button>
-            <button className="btn" disabled={!selection} onClick={handleClearSelection}>
-              <X size={14} /> 取消框选
-            </button>
-            <span className="btn-sep" />
-            <button className="btn primary" disabled={busy} onClick={handleGenerate}>
-              <Bot size={14} /> 提取并生成 AI 因子
-            </button>
-            <button className="btn" disabled={busy || !draft} onClick={handleBacktest}>
-              <TestTube2 size={14} /> 运行历史回测
-            </button>
-            <button className="btn" disabled={busy || !draft} onClick={handleSave}>
-              <Save size={14} /> 存入因子特征库
-            </button>
-            <span className="btn-sep" />
-            <button className={`btn ${showIndicators ? "active" : ""}`} onClick={() => setShowIndicators((v) => !v)}>
-              <Activity size={14} /> 指标叠加
-            </button>
-            <button className="btn" disabled={!selectedFactor} onClick={() => selectedFactor && viewFactor(selectedFactor)}>
-              <Eye size={14} /> 查看因子逻辑
-            </button>
-            <button className="btn" disabled={!selectedFactor} onClick={() => selectedFactor && disableFactor(selectedFactor)}>
-              <StopCircle size={14} /> 禁用此因子
-            </button>
-            <span className="btn-sep" />
-            {snapshot && (
-              <span className="status-pill">
-                最新价 <strong>{snapshot.current_price.toFixed(5)}</strong>
-                <span className={snapshot.change_pct_24h >= 0 ? "pnl-pos" : "pnl-neg"}>{snapshot.change_pct_24h >= 0 ? "▲" : "▼"}{Math.abs(snapshot.change_pct_24h).toFixed(3)}%</span>
-              </span>
-            )}
-          </div>
-          <KLineChart
-            bars={bars}
-            selection={selection}
-            entryPoints={entryPoints}
-            exitPoints={exitPoints}
-            supportLevels={supportLevels}
-            resistanceLevels={resistanceLevels}
-            mode={mode}
-            regionStats={regionStats}
-            indicators={indicators}
-            showIndicators={showIndicators}
-            onSelection={setSelection}
-            onPoint={handleAddPoint}
-            onLevel={handleAddLevel}
-            onMode={setMode}
-            modelSignal={modelSignal}
-          />
-        </section>
+      <nav className="topnav">
+        {PAGES.map((p) => (
+          <button
+            key={p.id}
+            className={`topnav-btn ${page === p.id ? "active" : ""}`}
+            title={p.hint}
+            onClick={() => {
+              const d = DEFAULT_TAB[p.id];
+              if (d) { setTab(d.tab as MainTab); if (d.sub) setSubTab(d.sub as SubTab); }
+              go(p.id);
+            }}
+          >
+            {p.label}
+          </button>
+        ))}
+        <div className="topnav-spacer" />
+        <button className="topnav-btn external" onClick={openVPatternPage} title="打开独立的 K 线形态交易页面">
+          <TrendingUp size={14} /> K线形态 ↗
+        </button>
+      </nav>
 
-        <aside className="sidebar">
+      {page === "chart" && (
+        <ChartDesk
+          onNotify={notify}
+          bars={bars}
+          selection={selection}
+          entryPoints={entryPoints}
+          exitPoints={exitPoints}
+          supportLevels={supportLevels}
+          resistanceLevels={resistanceLevels}
+          mode={mode}
+          regionStats={regionStats}
+          indicators={indicators}
+          showIndicators={showIndicators}
+          modelSignal={modelSignal}
+          snapshot={snapshot}
+          busy={busy}
+          draft={draft}
+          selectedFactor={selectedFactor}
+          markerHistoryLength={markerHistory.length}
+          levelHistoryLength={levelHistory.length}
+          onMode={setMode}
+          onSelection={setSelection}
+          onAddPoint={handleAddPoint}
+          onAddLevel={handleAddLevel}
+          onSuggestPoints={handleSuggestPoints}
+          onResetSelection={resetSelection}
+          onUndoMarker={handleUndoMarker}
+          onClearMarkers={handleClearMarkers}
+          onClearSelection={handleClearSelection}
+          onToggleIndicators={() => setShowIndicators((v) => !v)}
+          onGenerate={handleGenerate}
+          onBacktest={handleBacktest}
+          onSave={handleSave}
+          onViewFactor={viewFactor}
+          onDisableFactor={disableFactor}
+        />
+      )}
+
+      {page !== "chart" && (
+      <div className="main">
+
+        <aside className="sidebar" style={{ width: "100%", flexBasis: "auto" }}>
           <div className="tabs">
-            <button className={`tab ${tab === "factors" ? "active" : ""}`} onClick={() => { setTab("factors"); setSubTab("mark"); }}><Bot size={14} /> 因子工作台</button>
-            <button className={`tab ${tab === "market" ? "active" : ""}`} onClick={() => setTab("market")}><Clock size={14} /> 市场状态</button>
-            <button className={`tab ${tab === "mining" ? "active" : ""}`} onClick={() => setTab("mining")}><Radar size={14} /> 因子挖掘</button>
-            <button className={`tab ${tab === "trading" ? "active" : ""}`} onClick={() => { setTab("trading"); setSubTab("signals"); }}><Activity size={14} /> 交易中心</button>
-            <button className={`tab ${tab === "replay" ? "active" : ""}`} onClick={() => { setTab("replay"); setSubTab("replay"); }}><FileText size={14} /> 复盘与日志</button>
-            <button className={`tab ${tab === "ai" ? "active" : ""}`} onClick={() => setTab("ai")}><Cpu size={14} /> AI 管理</button>
-            <button className={`tab ${tab === "calendar" ? "active" : ""}`} onClick={() => setTab("calendar")}><Calendar size={14} /> 收益日历</button>
-            <button className="tab" onClick={openVPatternPage} title="打开独立的 K 线形态交易页面"><TrendingUp size={14} /> K线形态 ↗</button>
+            {page === "strategy" && (<>
+              <button className={`tab ${tab === "factors" && subTab === "mark" ? "active" : ""}`} onClick={() => { setTab("factors"); setSubTab("mark"); }}><Bot size={14} /> 形态标注</button>
+              <button className={`tab ${tab === "factors" && subTab === "backtest" ? "active" : ""}`} onClick={() => { setTab("factors"); setSubTab("backtest"); }}><TestTube2 size={14} /> 回测与优化</button>
+              <button className={`tab ${tab === "factors" && subTab === "manage" ? "active" : ""}`} onClick={() => { setTab("factors"); setSubTab("manage"); }}><Layers size={14} /> 因子管理</button>
+              <button className={`tab ${tab === "mining" ? "active" : ""}`} onClick={() => setTab("mining")}><Radar size={14} /> 因子挖掘</button>
+              <button className={`tab ${tab === "trading" && subTab === "signals" ? "active" : ""}`} onClick={() => { setTab("trading"); setSubTab("signals"); }}><Activity size={14} /> 信号与执行</button>
+              <button className={`tab ${tab === "trading" && subTab === "mt5" ? "active" : ""}`} onClick={() => { setTab("trading"); setSubTab("mt5"); }}><Wallet size={14} /> 实盘下单</button>
+              <button className={`tab ${tab === "trading" && subTab === "sltp" ? "active" : ""}`} onClick={() => { setTab("trading"); setSubTab("sltp"); }}><Shield size={14} /> 止损止盈</button>
+              <button className={`tab ${tab === "trading" && subTab === "okx-setup" ? "active" : ""}`} onClick={() => { setTab("trading"); setSubTab("okx-setup"); }}><Cable size={14} /> 欧易 API</button>
+            </>)}
+            {page === "perf" && (<>
+              <button className={`tab ${tab === "replay" && subTab === "replay" ? "active" : ""}`} onClick={() => { setTab("replay"); setSubTab("replay"); }}><FileText size={14} /> 复盘</button>
+              <button className={`tab ${tab === "replay" && subTab === "stats" ? "active" : ""}`} onClick={() => { setTab("replay"); setSubTab("stats"); }}><BarChart3 size={14} /> 因子统计</button>
+              <button className={`tab ${tab === "replay" && subTab === "orders" ? "active" : ""}`} onClick={() => { setTab("replay"); setSubTab("orders"); }}><FileClock size={14} /> 订单日志</button>
+              <button className={`tab ${tab === "replay" && subTab === "optimize" ? "active" : ""}`} onClick={() => { setTab("replay"); setSubTab("optimize"); }}><Bot size={14} /> 订单优化</button>
+              <button className={`tab ${tab === "calendar" ? "active" : ""}`} onClick={() => setTab("calendar")}><Calendar size={14} /> 收益日历</button>
+            </>)}
+            {page === "system" && (
+              <button className="tab active"><Cpu size={14} /> AI 管理</button>
+            )}
           </div>
 
           <div className="panel-body">
             {tab === "mining" && <FactorMiningPanel onNotify={notify} />}
-            {tab === "market" && <MarketStatusPanel />}
             {tab === "calendar" && <CalendarPanel />}
-            {tab === "factors" && (
-              <div className="sub-tabs">
-                <button className={`sub-tab ${subTab === "mark" ? "active" : ""}`} onClick={() => setSubTab("mark")}>形态标注</button>
-                <button className={`sub-tab ${subTab === "backtest" ? "active" : ""}`} onClick={() => setSubTab("backtest")}>回测与优化</button>
-                <button className={`sub-tab ${subTab === "manage" ? "active" : ""}`} onClick={() => setSubTab("manage")}>因子管理</button>
-              </div>
-            )}
             {tab === "factors" && subTab === "mark" && (
               <>
                 {!draft ? (
@@ -2832,7 +2826,7 @@ export default function App() {
                         ) : (
                           <button className="mini-btn primary" onClick={async () => { await api.enableFactor(f.id); await loadFactors(); notify("success", "因子已启用"); }}><CheckCircle2 size={12} /> 启用因子</button>
                         )}
-                          <button className="mini-btn primary" onClick={() => { setSelectedFactor(f); setTab("trading"); setSubTab("signals"); }}><Activity size={12} /> 模拟盘</button>
+                          <button className="mini-btn primary" onClick={() => { setSelectedFactor(f); gotoTrading("signals"); }}><Activity size={12} /> 模拟盘</button>
                       </div>
                       {sandboxResults[f.id] && (
                         <p className={`factor-desc ${sandboxResults[f.id].summary.includes("通过") ? "pnl-pos" : "pnl-neg"}`}>
@@ -2846,14 +2840,6 @@ export default function App() {
               </>
             )}
 
-            {tab === "trading" && (
-              <div className="sub-tabs">
-                <button className={`sub-tab ${subTab === "signals" ? "active" : ""}`} onClick={() => setSubTab("signals")}>信号与执行</button>
-                <button className={`sub-tab ${subTab === "mt5" ? "active" : ""}`} onClick={() => setSubTab("mt5")}>实盘下单</button>
-                <button className={`sub-tab ${subTab === "sltp" ? "active" : ""}`} onClick={() => setSubTab("sltp")}>止损止盈</button>
-                <button className={`sub-tab ${subTab === "okx-setup" ? "active" : ""}`} onClick={() => setSubTab("okx-setup")}>欧易 API</button>
-              </div>
-            )}
             {tab === "trading" && subTab === "signals" && (
               <>
                 <div className="tool-block">
@@ -3435,6 +3421,15 @@ export default function App() {
           </div>
         </aside>
       </div>
+      )}
+
+      {page !== "chart" && (
+        <div className="page-head">
+          {page === "strategy" && (<><Bot size={14} /> <strong>策略台</strong> <span>· 因子工作台 / 因子挖掘 / 交易中心</span></>)}
+          {page === "perf" && (<><FileText size={14} /> <strong>绩效台</strong> <span>· 复盘 / 因子统计 / 订单日志 / 收益日历</span></>)}
+          {page === "system" && (<><Cpu size={14} /> <strong>系统台</strong> <span>· AI 管理 / 告警 / 系统操作</span></>)}
+        </div>
+      )}
 
       <div className="status-strip">
         <Bell size={12} /> 最近告警：

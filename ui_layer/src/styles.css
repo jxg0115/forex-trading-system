@@ -1048,3 +1048,111 @@ input:focus {
 ::-webkit-scrollbar-track {
   background: transparent;
 }
+
+/* ==========================================================================
+   整页导航（四台 + K 线形态独立页）
+   新增样式，不改动上方任何既有类，保证旧侧边栏仍可按原样渲染（双轨期）。
+   ========================================================================== */
+
+.topnav {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 0 14px;
+  height: 42px;
+  background: var(--bg);
+  border-bottom: 1px solid var(--line);
+  flex: 0 0 auto;
+  overflow-x: auto;
+  scrollbar-width: thin;
+}
+
+.topnav-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 30px;
+  padding: 0 14px;
+  border-radius: 6px;
+  border: 1px solid transparent;
+  background: transparent;
+  color: var(--muted);
+  font-size: 13px;
+  cursor: pointer;
+  white-space: nowrap;
+  transition: background 0.15s, color 0.15s, border-color 0.15s;
+}
+
+.topnav-btn:hover {
+  background: var(--panel);
+  color: var(--text);
+}
+
+.topnav-btn.active {
+  color: var(--text);
+  background: var(--panel-2);
+  border-color: var(--line);
+  font-weight: 600;
+}
+
+.topnav-btn.active::before {
+  content: "";
+  width: 3px;
+  height: 14px;
+  border-radius: 2px;
+  background: var(--green);
+  margin-right: 2px;
+}
+
+/* K 线形态独立页入口：靠右、带外跳箭头语义 */
+.topnav-spacer {
+  flex: 1;
+  min-width: 8px;
+}
+
+.topnav-btn.external {
+  border-color: var(--line);
+  color: var(--blue);
+}
+
+.topnav-btn.external:hover {
+  border-color: var(--blue);
+  background: rgba(74, 163, 223, 0.1);
+}
+
+/* 整页容器：每台页面独立滚动，不挤压顶栏 */
+.page {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.page-body {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 12px 14px 20px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+/* 页面标题条（每台页面顶部一句话说明） */
+.page-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 14px;
+  background: var(--bg-2);
+  border-bottom: 1px solid var(--line);
+  flex: 0 0 auto;
+  font-size: 13px;
+  color: var(--muted);
+}
+
+.page-head strong {
+  color: var(--text);
+  font-size: 14px;
+}
